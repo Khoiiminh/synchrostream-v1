@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, OnModuleInit, Logger } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, OnModuleInit, Logger, InternalServerErrorException } from "@nestjs/common";
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import * as nodemailer from 'nodemailer';
@@ -72,8 +72,11 @@ export class PasswordService implements OnModuleInit {
         );
 
         if (!user) {
-            this.logger.warn(`Reset failed: User with email ${dto.email} not found`);
-            throw new NotFoundException('User not found')
+            // Log as warn, but won't throw to prevent email enumeration attacks
+            this.logger.warn(`Reset requested for non-existent email: ${dto.email}`);
+            return {
+                message: 'If an account exists, a reset link has been sent.'
+            }
         };
 
         const ttl = 3600000;
@@ -83,18 +86,27 @@ export class PasswordService implements OnModuleInit {
 
         this.tokenTTL = ttl;
 
+        this.logger.debug(`Generate reset token for user ID: ${user.id}`);
+
         await this.pg.query(
             'UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3',
             [token, expiresAt, user.id]
         );
 
-        this.logger.debug(`Token generated and saved for user ID: ${user.id}`);
-        this.logger.debug(`The token: ${token}`);
+        try {
+            const payload = { email: dto.email, token: token };
 
-        const payload = { email: dto.email, token: token };
+            await this.sendResetEmail(payload);
 
-        await this.sendResetEmail(payload);
-        return { message: 'Reset token sent to email'};
+            this.logger.log(`Reset email successfully dispatched to: ${dto.email}`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.logger.error(`SMTP/OAuth2 Error: ${errorMessage}`);
+            throw new InternalServerErrorException('Error sending email');
+        }
+
+
+        return { message: 'If an account exists, a reset link has been sent.'};
     }
 
     private async sendResetEmail({ email, token }: { email: string, token: string }){
@@ -106,7 +118,7 @@ export class PasswordService implements OnModuleInit {
             <div style="font-family: sans-serif; text-align: center; border: 1px solid #eee; padding: 20px;">
                 <h2 style="color: #333;">SynchroStream</h2>
                 <p>You requested a password reset. This verification is valid for ${ttl} ${ttl > 1 ? "minutes" : "minute"}.</p>
-                <a href="${frontendUrl}/v1/password-reset/confirm?token=${token}" 
+                <a href="${frontendUrl}/auth/password-reset?token=${token}" 
                    style="display: inline-block; background: #000; color: #fff; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
                    Reset Password
                 </a>
@@ -139,9 +151,12 @@ export class PasswordService implements OnModuleInit {
         await this.pg.withTransaction(async (client) => {
             await client.query('UPDATE users SET password_hash = $1 where id = $2', [newHash, user.id]);
             await client.query('UPDATE users SET reset_token = NULL, reset_expires = NULL where id = $1', [user.id]);
+            this.logger.log(`Password updated and tokens cleared for user: ${user.id}`);
         });
 
-        this.logger.log(`Password successfully updated for user ID: ${user.id}`);
-        return { message: 'Password updated successfully' };
+        return { 
+            message: 'Password updated successfully',
+            userId: user.id, 
+        };
     }
 }

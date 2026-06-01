@@ -4,6 +4,8 @@ import { AppService } from './app.service.js';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { PasswordResetModule } from './modules/password-reset/password-reset.module.js';
+import { InfrastructureModule } from './shared/infrastructure/infrastructure.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
 
 @Module({
     imports: [
@@ -11,8 +13,10 @@ import { PasswordResetModule } from './modules/password-reset/password-reset.mod
             envFilePath: '.env.development',
             isGlobal: true
         }),
+        InfrastructureModule,
         AuthModule,
         PasswordResetModule,
+        AdminModule,
     ],
     controllers: [AppController],
     providers: [AppService],
