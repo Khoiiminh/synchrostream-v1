@@ -18,8 +18,23 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
             throw new Error('REDIS_URL is not defined in .env.development');
         }
 
-        this.client = new Redis(connectionString);
-        this.publisher = new Redis(connectionString);
+        const commonOptions = {
+            keepAlive: 30000,
+            retryStrategy: (times: number) => {
+                const delay = Math.min(times * 50, 2000);
+                return delay;
+            },
+            reconnectOnError: (err: Error) => {
+                const targetError = 'READONLY';
+                if (err.message.slice(0, targetError.length) === targetError) {
+                return true; // Reconnect on target error
+                }
+                return 1; // Reconnect on other errors (like ECONNRESET)
+            },
+        };
+
+        this.client = new Redis(connectionString, commonOptions);
+        this.publisher = new Redis(connectionString, commonOptions);
 
         console.log('Redis Persistency & Pub/Sub clients initialized');
     }

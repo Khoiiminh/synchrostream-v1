@@ -25,7 +25,19 @@ export class RedisBlacklistProvider implements OnModuleInit, OnModuleDestroy {
             port,
             username,
             password,
-            keepAlive: 10000,
+            keepAlive: 30000,
+            retryStrategy(times) {
+                // Automatically reconnect without crashing the process
+                const delay = Math.min(times * 50, 2000);
+                return delay;
+            },
+            reconnectOnError(err) {
+                const targetError = 'ECONNRESET';
+                if (err.message.includes(targetError)) {
+                    return true;
+                }
+                return false;
+            }
         });
 
         this.client.on('connect', () => {
