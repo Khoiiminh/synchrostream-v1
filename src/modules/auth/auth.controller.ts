@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, Get, Request, Logger } from "@nestjs/common";
+import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, Get, Request, Logger, Header } from "@nestjs/common";
 import { AuthService } from "./auth.service.js";
 import { RegisterDto, LoginDto } from "./auth.dto.js";
 import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiBearerAuth } from '@nestjs/swagger';
@@ -98,12 +98,15 @@ export class AuthController {
     // req.user is automatically attached by passport-jwt strategy validate()
     this.logger.log(`User ${req.user.id} (${req.user.role}) is fetching their profile`);
     
+    const dbUser = await this.authService.findUserProfileById(req.user.id);
+    
     return {
-      message: "Profile retrieved successfully",
+      message: "Profile retrieved successfully from database context",
       data: {
-        id: req.user.id,
-        username: req.user.username,
-        role: req.user.role
+        id: dbUser.id,
+        username: dbUser.username,
+        email: dbUser.email, // Cleanly forwarded now
+        role: dbUser.role
       }
     };
   }

@@ -134,12 +134,12 @@ export class CloudflareR2Provider implements OnModuleInit {
     }
 
     async generatePresignedUrl(movieId: string): Promise<string> {
-        const command = new GetObjectCommand({
-            Bucket: this.bucketName,
-            Key: `film/${movieId}/master.m3u8`,
-        });
-        
-        return getSignedUrl(this.s3, command, { expiresIn: 14400 });
+        const baseUrl = this.configService.get<string>('MEDIA_BASE_URL');
+        if (!baseUrl) {
+            throw new Error('MEDIA_BASE_URL is missing in environment variables');
+        }
+
+        return `${baseUrl}/film/${movieId}/master.m3u8`;
     }
 
     async abortMultiPartUpload({ key, uploadId }: { key: string, uploadId: string }): Promise<void> {

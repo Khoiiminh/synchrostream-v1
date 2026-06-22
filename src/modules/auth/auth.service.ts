@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   Logger,
+  NotFoundException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
@@ -110,5 +111,26 @@ export class AuthService {
     return {
       message: "Logged out and token revoked"
     }
+  }
+
+  async findUserProfileById(userId: string) {
+    const query = `
+      SELECT 
+        id, 
+        username, 
+        email, 
+        role 
+      FROM public.users 
+      WHERE id = $1;
+    `;
+
+    const [user] = await this.pg.query<any>(query, [userId]);
+
+    if (!user || user.length === 0) {
+      this.logger.error(`User not found`);
+      throw new NotFoundException('The requested user session profile could not be located.');
+    }
+
+    return user;
   }
 }

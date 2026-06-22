@@ -7,6 +7,7 @@ import * as path from "path";
 import * as fs from 'fs';
 import { ConfigService } from "@nestjs/config";
 import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
+import { Readable } from "stream";
 
 @Injectable()
 export class AdminTranscodingService implements OnModuleInit {
@@ -187,6 +188,8 @@ export class AdminTranscodingService implements OnModuleInit {
                     '-hls_time 4',             // Target 4-second chunk intervals matching blueprint spec
                     '-hls_playlist_type vod',
                     '-hls_segment_type fmp4',  // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
+                    '-hls_fmp4_init_filename', // Explicitly bundle the initialization map file inside the 360p subdirectory!
+                    path.join(outDir360p, 'init.mp4'),
                     `-hls_segment_filename ${path.join(outDir360p, 'chunk_%03d.m4s')}`
                 ])
                 // Output Variant 2: 804p High-Bitrate Master Branch
@@ -206,6 +209,8 @@ export class AdminTranscodingService implements OnModuleInit {
                     '-hls_time 4',
                     '-hls_playlist_type vod',
                     '-hls_segment_type fmp4',  // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
+                    '-hls_fmp4_init_filename',
+                    path.join(outDir804p, 'init.mp4'),
                     `-hls_segment_filename ${path.join(outDir804p, 'chunk_%03d.m4s')}`
                 ]);
 
@@ -257,14 +262,48 @@ export class AdminTranscodingService implements OnModuleInit {
                 if (localFilePath.endsWith('.ts')) contentType = 'video/mp2t';
                 if (localFilePath.endsWith('.m4s')) contentType = 'video/iso.segment';
                 if (localFilePath.endsWith('.mpd')) contentType = 'application/dash+xml';
+                if (localFilePath.endsWith('.mp4')) contentType = 'video/mp4';
 
-                const fileReadStream = fs.createReadStream(localFilePath);
+                // Skip uploading the original raw mezzanine file if it got caught in the temp workspace pathing
+                if (localFilePath.endsWith('mezzanine.mp4')) {
+                    continue;
+                }
+
+                let uploadBody: Readable;
+
+                if (localFilePath.endsWith('.m3u8')) {
+                    // Read the manifest file into memory as text
+                    let manifestContent = fs.readFileSync(localFilePath, 'utf-8');
+
+                    // Force remove any "file:///D:/..." or "file:///D:\..." variants
+                    // This matches 'file://' followed by an optional slash, 'D:', and any combinations of / or \
+                    const fileUrlRegex = new RegExp(`file:\/\/\/?D:[\/\\\\][^\n\r]*?${movieId}[\/\\\\](360p|804p)[\/\\\\]`, 'g');
+                    manifestContent = manifestContent.replace(fileUrlRegex, '');
+
+                    // Catch any bare absolute paths like "D:\synchrostream_temp\transcode-xxx\804p\"
+                    const absolutePathRegex = new RegExp(`D:[\/\\\\][^\n\r]*?${movieId}[\/\\\\](360p|804p)[\/\\\\]`, 'g');
+                    manifestContent = manifestContent.replace(absolutePathRegex, '');
+
+                    // Standardize backslashes for absolute directory text parsing
+                    const standardizedTmpDir = tmpDir.replace(/\\/g, '/');
+
+                    // 3. Ultimate safety catch-all: strip out any lingering explicit variant path strings entirely
+                    manifestContent = manifestContent.split(`transcode-${movieId}/360p/`).join('');
+                    manifestContent = manifestContent.split(`transcode-${movieId}\\360p\\`).join('');
+                    manifestContent = manifestContent.split(`transcode-${movieId}/804p/`).join('');
+                    manifestContent = manifestContent.split(`transcode-${movieId}\\804p\\`).join('');
+
+                    uploadBody = Readable.from(manifestContent);
+                } else {
+                    // Media fragments (.m4s, init.mp4) can stream untouched
+                    uploadBody = fs.createReadStream(localFilePath);
+                }
 
                 this.logger.debug(`Streaming artifact directly onto R2 target location: ${destinationR2Key} (${contentType})`);
                 
                 await this.r2.uploadStream({
                     key: destinationR2Key,
-                    stream: fileReadStream,
+                    stream: uploadBody,
                     contentType: contentType,
                 });
             }
