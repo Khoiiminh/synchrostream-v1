@@ -7,12 +7,12 @@ import * as path from 'path';
 @Injectable()
 export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
     private pool!: Pool;
-    private caContent: string = fs.readFileSync(path.join(process.cwd(), 'certs/ca.pem')).toString();
 
-    constructor(private configServie: ConfigService) {}
+    constructor(private configService: ConfigService) {}
 
     onModuleInit() {
-        const connectionString = this.configServie.get<string>('DATABASE_URL');
+        const connectionString = this.configService.get<string>('DATABASE_URL');
+        const caContent = this.configService.get<string>('DB_CA_CERT');
 
         if (!connectionString) {
             throw new Error('DATABASE_URL is not defined in .env.development');
@@ -22,10 +22,9 @@ export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
             connectionString,
             max: 20,
             idleTimeoutMillis: 30000,
-            ssl: { 
-                rejectUnauthorized: true,
-                ca: [this.caContent] 
-            }
+            ssl: caContent
+                ? { rejectUnauthorized: true, ca: [caContent] }
+                : undefined
         });
 
         console.log('PostgreSQL Connection Pool initialized');
