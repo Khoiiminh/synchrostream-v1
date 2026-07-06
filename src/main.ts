@@ -12,7 +12,7 @@ async function bootstrap() {
     // Frontend origins
     const allowedOrigins = [
         'http://localhost:3000',
-        'http://192.168.1.4:3000'
+        'https://synchrostream-fe-v1.vercel.app/'
     ];
 
     app.enableCors({
