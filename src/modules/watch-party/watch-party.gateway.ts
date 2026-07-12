@@ -7,7 +7,7 @@ import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { WsJwtGuard } from "../auth/ws-jwt.guard.js";
 
 @WebSocketGateway({
-    namspace: 'sync-hub',
+    namespace: 'sync-hub',
     cors: { origin: '*' }
 })
 export class WatchPartyGateway implements OnGatewayDisconnect {
@@ -16,6 +16,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
 
     private readonly runningActors = new Map<string, WatchRoomActor>();
     private readonly socketToParticipantMap = new Map<string, { participantId: string; roomId: string; roomCode: string; userId: string }>();
+    private readonly pendingCleanups = new Map<string, NodeJS.Timeout>();
 
     constructor(
         private readonly watchPartyService: WatchPartyService,
@@ -31,27 +32,66 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
 
         this.logger.warn({ message: 'Handshake link broken. Launching cleanup routines', socketId: socket.id, ...metadata });
 
-        try {
-            await this.watchPartyService.disassociateParticipant(metadata.participantId);
-        } catch (error) {
-            this.logger.error({ message: 'Failed to disassociate participant from database store', participantId: metadata.participantId, error: (error as Error).message });
-        }
-
-        const actor = this.runningActors.get(metadata.roomId);
-        if (actor) {
-            actor.evictParticipantByUserId(metadata.userId);
-            this.server.to(metadata.roomId).emit('room:member_left', { userId: metadata.userId });
-
-            const remainingCount = actor.getParticipantCount();
-            this.logger.log({ message: 'Evicted participant node from active room actor context', roomId: metadata.roomId, userId: metadata.userId, remainingCount });
-
-            if (remainingCount === 0) {
-                this.runningActors.delete(metadata.roomId);
-                this.logger.log({ message: 'Actor context cleanly purged from runtime engine logs due to zero occupancy', roomId: metadata.roomId });
-            }
-        }
-
+        // Clean up client socket tracking references immediately
         this.socketToParticipantMap.delete(socket.id);
+
+        // Schedule the room and participant data purge to execute in 10 seconds
+        const cleanupTimeoutId = setTimeout(async () => {
+            try {
+                const actor = this.runningActors.get(metadata.roomId);
+                
+                // Check if the disconnecting user is the OWNER of this active room actor context
+                const isOwner = actor && actor.getSnapshot().ownerId === metadata.userId;
+
+                if (isOwner) {
+                    // --- OWNER DISCONNECT CLEANUP SEQUENCE ---
+                    this.logger.log({ message: 'Owner grace period expired. Cleaning up entire room engine.', roomId: metadata.roomId });
+
+                    // 1. Alert all connected clients in the room channel that the party is over
+                    this.server.to(metadata.roomId).emit('room:terminated', { 
+                        message: 'The room host has left the session. This watch room has been closed.' 
+                    });
+
+                    // 2. Clear out persistent state database records and Redis caches via service
+                    await this.watchPartyService.leaveRoomSession(metadata.userId);
+
+                    // 3. Purge actor from engine management
+                    this.runningActors.delete(metadata.roomId);
+
+                    // 4. Force disconnect all remaining sockets tracking this room
+                    const sockets = await this.server.in(metadata.roomId).fetchSockets();
+                    for (const clientSocket of sockets) {
+                        clientSocket.disconnect(true);
+                    }
+                } else {
+                    // --- PARTICIPANT DISCONNECT CLEANUP SEQUENCE ---
+                    // 1. Drop participant record from the database relation
+                    await this.watchPartyService.disassociateParticipant(metadata.participantId);
+                    
+                    // 2. Clear out tracking contexts from the state actor if it still exists
+                    if (actor) {
+                        actor.evictParticipantByUserId(metadata.userId);
+                        this.server.to(metadata.roomId).emit('room:member_left', { userId: metadata.userId });
+
+                        const remainingCount = actor.getParticipantCount();
+                        this.logger.log({ message: 'Evicted participant node from active room actor context', roomId: metadata.roomId, userId: metadata.userId, remainingCount });
+
+                        // Clean up actor memory if the room is empty and owner is long gone
+                        if (remainingCount === 0) {
+                            this.runningActors.delete(metadata.roomId);
+                            this.logger.log({ message: 'Actor context cleanly purged due to zero occupancy', roomId: metadata.roomId });
+                        }
+                    }
+                }
+                
+                // Clear out this timeout key from tracking ledger
+                this.pendingCleanups.delete(metadata.userId);
+            } catch (error) {
+                this.logger.error({ message: 'Failed to complete deferred user disassociation routine', participantId: metadata.participantId, error: (error as Error).message });
+            }
+        }, 10000); // 10-second grace window
+
+        this.pendingCleanups.set(metadata.userId, cleanupTimeoutId);
     }
 
     @SubscribeMessage('room:connect')
@@ -66,6 +106,13 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
             throw new BadRequestException('Handshake context invalid: Missing authorized credentials frame.');
         }
 
+        // --- NEW RECONNECTION GRACE INTERCEPTION ---
+        if (this.pendingCleanups.has(user.id)) {
+            clearTimeout(this.pendingCleanups.get(user.id)!);
+            this.pendingCleanups.delete(user.id);
+            this.logger.log({ message: 'User reconnected within the grace window. Cancelled scheduled cleanup.', userId: user.id });
+        }
+        // ---------------------------------------------
         this.logger.log({ message: 'Processing room registration request', userId: user.id, roomCode: payload.dto?.roomCode });
 
         try {
@@ -76,6 +123,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
                 actor = new WatchRoomActor(
                     session.roomId,
                     session.roomCode,
+                    session.passwordPlain,
                     session.ownerId,
                     session.movieId,
                     session.maxParticipants,
@@ -150,6 +198,30 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
             this.logger.warn({ message: 'Sync operational request failed runtime execution check', roomId: data.roomId, requestingId: data.userId, action: data.action, error: (error as Error).message });
             socket.emit('room:error', { message: (error as Error).message });
         }
+    }
+
+    @SubscribeMessage('room:chat:message')
+    @UseGuards(WsJwtGuard)
+    async handleChatMessage(
+        @ConnectedSocket() socket: Socket,
+        @MessageBody() data: { roomCode: string; message: string }
+    ) {
+        const user = socket.data.user;
+        const targetMeta = this.socketToParticipantMap.get(socket.id);
+
+        if (!user || !targetMeta) {
+            throw new BadRequestException('Message block transmission rejected: Context identity unverified.');
+        }
+
+        this.logger.log({ message: 'Inbound chat frame intercept received', roomCode: data.roomCode, userId: user.id });
+
+        // Route the broadcast down into the room targeting space
+        this.server.to(targetMeta.roomId).emit('room:chat:broadcast', {
+            userId: user.id,
+            username: user.username,
+            message: data.message.trim(),
+            timestamp: Date.now()
+        });
     }
 
     @SubscribeMessage('room:telemetry:ping')

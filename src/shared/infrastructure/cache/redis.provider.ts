@@ -50,6 +50,11 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
             .exec();
     }
 
+    async delRoomState(roomCode: string): Promise<void> {
+        const key = `room:${roomCode}:state`;
+        await this.client.del(key);
+    }
+
     async publicSyncPulse(roomCode: string, payload: any): Promise<void> {
         const channel = `sync:pulse:${roomCode}`;
         await this.publisher.publish(channel, JSON.stringify(payload));

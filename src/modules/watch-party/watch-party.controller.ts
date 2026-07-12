@@ -1,10 +1,11 @@
-import { BadRequestException, Controller, Get, Logger, Query, Req, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import { BadRequestException, Body, Controller, Get, Logger, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
 import { RolesGuard } from "../auth/roles.guard.js";
 import { Roles } from "../auth/roles.decorator.js";
 import { LiveKitTokenService } from "./livekit-token.service.js";
 import { ConfigService } from "@nestjs/config";
+import { CreateRoomDto, WatchPartyService } from "./watch-party.service.js";
 
 @ApiTags('Watch Party Collaborator')
 @ApiBearerAuth('JWT-auth')
@@ -17,6 +18,7 @@ export class WatchPartyController {
     constructor(
         private readonly livekitTokenService: LiveKitTokenService,
         private readonly configService: ConfigService,
+        private readonly watchPartyService: WatchPartyService,
     ) {}
 
     @Get('rtc-token')
@@ -44,5 +46,11 @@ export class WatchPartyController {
             livekitUrl: this.configService.get<string>('LIVEKIT_URL') || 'ws://localhost:7880',
             token: tokenJwt
         }
+    }
+
+    @Post('rooms')
+    @ApiOperation({ summary: 'Provision a persistent PostgreSQL room registry record as a host' })
+    async createRoom(@Body() dto: CreateRoomDto, @Req() req: any) {
+        return this.watchPartyService.createRoomSession({ dto, ownerId: req.user.id });
     }
 }   

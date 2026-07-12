@@ -23,6 +23,7 @@ export class WatchRoomActor {
     constructor(
         public readonly roomId: string,
         public readonly roomCode: string,
+        public readonly passwordPlain: string,
         public readonly ownerId: string,
         public readonly movieId: string,
         public readonly maxParticipants: number,
@@ -32,8 +33,9 @@ export class WatchRoomActor {
         return {
             roomId: this.roomId,
             roomCode: this.roomCode,
+            passwordPlain: this.passwordPlain,
             ownerId: this.ownerId,
-            moviedId:this.movieId,
+            movieId:this.movieId,
             playback: { ...this.playbackState },
             occupancy: {
                 current: this.participants.size,

@@ -5,15 +5,16 @@ import { TransformationInterceptor } from './common/interceptors/transformation.
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { GlobalExceptionFilter } from './common/interceptors/http-exception.filter.js';
 import cookieParser from 'cookie-parser';
+import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule);
 
-    // Frontend origins
-    const allowedOrigins = [
-        'http://localhost:3000',
-        'http://192.168.1.4:3000'
-    ];
+    const configService = app.get(ConfigService);
+
+    const allowedOriginsEnv = configService.get<string>('ALLOWED_ORIGINS') || 'http://localhost:3000';
+
+    const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim());
 
     app.enableCors({
         origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
@@ -61,9 +62,10 @@ async function bootstrap() {
         .build();
 
     const document = SwaggerModule.createDocument(app, config);
+    const port = configService.get<number>('PORT') ?? 3000;
 
     SwaggerModule.setup('v1/docs', app, document);
 
-    await app.listen(process.env.PORT ?? 3000);
+    await app.listen(port);
 }
 await bootstrap();
