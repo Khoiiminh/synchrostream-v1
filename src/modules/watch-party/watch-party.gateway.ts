@@ -200,6 +200,30 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         }
     }
 
+    @SubscribeMessage('room:chat:message')
+    @UseGuards(WsJwtGuard)
+    async handleChatMessage(
+        @ConnectedSocket() socket: Socket,
+        @MessageBody() data: { roomCode: string; message: string }
+    ) {
+        const user = socket.data.user;
+        const targetMeta = this.socketToParticipantMap.get(socket.id);
+
+        if (!user || !targetMeta) {
+            throw new BadRequestException('Message block transmission rejected: Context identity unverified.');
+        }
+
+        this.logger.log({ message: 'Inbound chat frame intercept received', roomCode: data.roomCode, userId: user.id });
+
+        // Route the broadcast down into the room targeting space
+        this.server.to(targetMeta.roomId).emit('room:chat:broadcast', {
+            userId: user.id,
+            username: user.username,
+            message: data.message.trim(),
+            timestamp: Date.now()
+        });
+    }
+
     @SubscribeMessage('room:telemetry:ping')
     handleNetworkTelemetry(
         @ConnectedSocket() socket: Socket,

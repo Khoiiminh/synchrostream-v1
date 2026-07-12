@@ -35,7 +35,7 @@ export class WatchRoomActor {
             roomCode: this.roomCode,
             passwordPlain: this.passwordPlain,
             ownerId: this.ownerId,
-            moviedId:this.movieId,
+            movieId:this.movieId,
             playback: { ...this.playbackState },
             occupancy: {
                 current: this.participants.size,
