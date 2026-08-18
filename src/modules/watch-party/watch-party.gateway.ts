@@ -160,42 +160,113 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
     }
 
     @SubscribeMessage('room:sync:pulse')
+    @UseGuards(WsJwtGuard)
     async handlePlaybackPulse(
         @ConnectedSocket() socket: Socket,
         @MessageBody() data: { roomId: string; roomCode: string; userId: string; action:'PLAY' | 'PAUSE' | 'SEEK'; playhead: number }
     ) {
-        const actor = this.runningActors.get(data.roomId);
+        this.logger.log({
+            message: 'Inbound playback pulse received',
+            socketId: socket.id,
+            socketUserId: socket.data.user?.id,
+            payload: data,
+        });
+
+        // 1. Safely extract verified identity injected by WsJwtGuard
+        const user = socket.data.user; 
+        if (!user) {
+            this.logger.warn({
+                message: 'Playback pulse rejected: authenticated socket context missing',
+                socketId: socket.id,
+            });
+
+            throw new BadRequestException('Sync block transmission rejected: Context identity unverified.');
+        }
+
+        this.logger.log({
+            message: 'Playback pulse authenticated',
+            socketId: socket.id,
+            userId: user.id,
+            roomId: data.roomId,
+            roomCode: data.roomCode,
+            action: data.action,
+            playhead: data.playhead,
+        });
+
+        const metadata = this.socketToParticipantMap.get(socket.id);
+
+        if (!metadata) {
+            throw new BadRequestException(
+                'Playback pulse rejected: socket is not bound to a room.'
+            );
+        }
+
+        const actor = this.runningActors.get(metadata.roomId);
+
         if (!actor) {
-            this.logger.warn({ message: 'Sync command rejected: State Actor target absent', roomId: data.roomId, requestingId: data.userId });
+            this.logger.warn({
+                message: 'Sync command rejected: State Actor target absent',
+                roomId: metadata.roomId,
+                requestingId: user.id,
+            });
+
+            throw new BadRequestException(
+                'Synchronization step failure: State Actor target missing.'
+            );
+        }
+
+        if (!actor) {
+            this.logger.warn({ message: 'Sync command rejected: State Actor target absent', roomId: data.roomId, requestingId: user.id });
             throw new BadRequestException('Synchronization step failure: State Actor target missing.');
         }
 
         try {
+            // 2. Use user.id (verified UUID) instead of trusting data.userId payload
             const updatedState = actor.synchronizePlayback({
-                requestingId: data.userId, 
+                requestingId: user.id, 
                 action: data.action, 
                 targetPlayhead: data.playhead
+            });
+
+            this.logger.log({
+                message: 'Playback state transformed by room actor',
+                roomId: data.roomId,
+                userId: user.id,
+                action: data.action,
+                previousOrRequestedPlayhead: data.playhead,
+                resultingPlayhead: updatedState.playhead,
+                status: updatedState.status,
+                serverExecutionTime: updatedState.lastUpdated,
             });
 
             const broadcastPayload = {
                 action: data.action,
                 playhead: updatedState.playhead,
-                originatorId: data.userId,
+                originatorId: user.id,
                 serverExecutionTime: updatedState.lastUpdated
             };
 
-            this.server.to(data.roomId).emit('room:sync:broadcast', broadcastPayload);
-            await this.redis.publicSyncPulse(data.roomCode, broadcastPayload);
+            this.logger.log({
+                message: 'Broadcasting playback synchronization',
+                roomId: data.roomId,
+                payload: broadcastPayload,
+            });
+
+            this.server
+                .to(metadata.roomId)
+                .emit('room:sync:broadcast', broadcastPayload);
+
+            await this.redis.publicSyncPulse(metadata.roomCode, broadcastPayload);
 
             this.logger.log({ 
                 message: 'Playback synchronization state change applied and broadcasted', 
                 roomId: data.roomId, 
                 action: data.action, 
                 playhead: data.playhead, 
-                originatorId: data.userId 
+                originatorId: user.id 
             });
         } catch (error) {
-            this.logger.warn({ message: 'Sync operational request failed runtime execution check', roomId: data.roomId, requestingId: data.userId, action: data.action, error: (error as Error).message });
+            this.logger.warn({ message: 'Sync operational request failed runtime execution check', roomId: data.roomId, requestingId: user.id, action: data.action, error: (error as Error).message });
             socket.emit('room:error', { message: (error as Error).message });
         }
     }

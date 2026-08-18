@@ -227,4 +227,40 @@ export class WatchPartyService {
             return { status: 'PARTICIPANT_EVICTED', roomCode: room_code };
         }
     }
+
+    async getRoomDetailsByCode(roomCode: string) {
+        const query = `
+            SELECT 
+                id AS "roomId",
+                room_code AS "roomCode",
+                owner_id AS "ownerId",
+                movie_id AS "movieId",
+                max_participants AS "maxParticipants",
+                is_active AS "isActive"
+            FROM public.rooms
+            WHERE UPPER(TRIM(room_code)) = $1 AND is_active = true
+        `;
+
+        try {
+            const cleanCode = roomCode.trim().toUpperCase();
+            const [room] = await this.pg.query<any>(query, [cleanCode]);
+
+            if (!room) {
+                this.logger.warn({ 
+                    message: 'Room lookup failed: Code not found or inactive', 
+                    roomCode 
+                });
+                return null;
+            }
+
+            return room;
+        } catch (error) {
+            this.logger.error({ 
+                message: 'Failed to execute room database lookup query', 
+                roomCode, 
+                error: (error as Error).message 
+            });
+            throw error;
+        }
+    }
 }
