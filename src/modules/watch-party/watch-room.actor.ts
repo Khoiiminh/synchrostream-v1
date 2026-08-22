@@ -5,7 +5,6 @@ export interface ParticipantNode {
     userId: string;
     username: string;
     rtcIdentity: string;
-    hasControlPrivilege: boolean;
     latencyScore: number;
 }
 
@@ -66,21 +65,47 @@ export class WatchRoomActor {
         action: 'PLAY' | 'PAUSE' | 'SEEK',
         targetPlayhead: number
     }): PlaybackState {
-        const actingMember = this.participants.get(p.requestingId);
-
         const isOwner = p.requestingId === this.ownerId;
-        const hasPrivilege = actingMember?.hasControlPrivilege === true;
 
-        if (!isOwner && !hasPrivilege) {
-            this.logger.warn({ message: 'Playback transformation rule validation failed: Insufficient permissions framework', roomId: this.roomId, requestingId: p.requestingId, action: p.action });
-            throw new BadRequestException('Action rejected: Insufficient track sync control privileges.');
+        if (!isOwner) {
+            this.logger.warn({
+                message: 'Playback command rejected: only the room owner has playback authority',
+                roomId: this.roomId,
+                requestingId: p.requestingId,
+                ownerId: this.ownerId,
+                action: p.action,
+            });
+
+            throw new BadRequestException(
+                'Playback control rejected: only the room owner can control playback.'
+            );
         }
 
         this.playbackState = {
             playhead: p.targetPlayhead,
-            status: p.action === 'PLAY' ? 'PLAYING' : p.action === 'PAUSE' ? 'PAUSED': this.playbackState.status,
+            status:
+            p.action === 'PLAY'
+                ? 'PLAYING'
+                : p.action === 'PAUSE'
+                    ? 'PAUSED'
+                    : this.playbackState.status,
             lastUpdated: Date.now(),
-        };
+        }
+        // const actingMember = this.participants.get(p.requestingId);
+
+        // const isOwner = p.requestingId === this.ownerId;
+        // const hasPrivilege = actingMember?.hasControlPrivilege === true;
+
+        // if (!isOwner && !hasPrivilege) {
+        //     this.logger.warn({ message: 'Playback transformation rule validation failed: Insufficient permissions framework', roomId: this.roomId, requestingId: p.requestingId, action: p.action });
+        //     throw new BadRequestException('Action rejected: Insufficient track sync control privileges.');
+        // }
+
+        // this.playbackState = {
+        //     playhead: p.targetPlayhead,
+        //     status: p.action === 'PLAY' ? 'PLAYING' : p.action === 'PAUSE' ? 'PAUSED': this.playbackState.status,
+        //     lastUpdated: Date.now(),
+        // };
 
         return this.playbackState;
     }
