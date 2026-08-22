@@ -116,44 +116,82 @@ export class WatchPartyService {
     }
 
     /**
-     * Challenge routing verification matching table fields natively
+     * 
      */
     async associateParticipant(p: {dto: JoinRoomDto, userId: string, rtcIdentity: string}) {
+        const cleanCode = p.dto.roomCode.trim().toUpperCase();
+
         const findRoomQuery = `
-            SELECT id, room_code, "password", owner_id, movie_id, max_participants
-            FROM rooms
-            WHERE UPPER(TRIM(room_code)) = $1 AND is_active = true
+            SELECT
+                id,
+                room_code,
+                "password",
+                owner_id,
+                movie_id,
+                max_participants
+            FROM public.rooms
+            WHERE UPPER(TRIM(room_code)) = $1
+            AND is_active = true
         `;
 
-        const cleanCode = p.dto.roomCode.trim().toUpperCase();
-        const [room] = await this.pg.query<any>(findRoomQuery, [p.dto.roomCode]);
+        const [room] = await this.pg.query<any>(findRoomQuery, [cleanCode]);
+
         if (!room) {
-            this.logger.warn({ message: 'Join room rejected: Active room code sequence not found', roomCode: p.dto.roomCode, userId: p.userId });
-            throw new NotFoundException('Handshake rejected: No matching active room stream code sequence.');
+            this.logger.warn({
+                message: 'Join room rejected: Active room not found',
+                roomCode: cleanCode,
+                userId: p.userId,
+            });
+
+            throw new NotFoundException(
+                'Handshake rejected: No matching active room stream code sequence.'
+            );
         }
 
         const isOwner = p.userId === room.owner_id;
 
+        // Owner joins without supplying the room password.
+        // Participants must provide the room password.
         if (!isOwner && room.password !== p.dto.passwordPlain) {
-            this.logger.warn({ message: 'Join room security violation: Credentials challenge failed', roomCode: cleanCode, roomId: room.id, userId: p.userId });
-            throw new BadRequestException('Security credentials verification failure: Authentication rejected.');
+            this.logger.warn({
+                message: 'Join room rejected: Invalid room credentials',
+                roomCode: cleanCode,
+                roomId: room.id,
+                userId: p.userId,
+            });
+
+            throw new BadRequestException(
+                'Security credentials verification failure: Authentication rejected.'
+            );
         }
 
         const createParticipantQuery = `
-            INSERT INTO room_participants (room_id, user_id, rtc_identity, has_control_privilege)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, room_id, has_control_privilege
+            INSERT INTO public.room_participants (
+                room_id,
+                user_id,
+                rtc_identity
+            )
+            VALUES ($1, $2, $3)
+            RETURNING id, room_id
         `;
 
         try {
-            const [participant] = await this.pg.query<any>(createParticipantQuery, [
-                room.id,
-                p.userId,
-                p.rtcIdentity,
-                isOwner
-            ]);
+            const [participant] = await this.pg.query<any>(
+                createParticipantQuery,
+                [
+                    room.id,
+                    p.userId,
+                    p.rtcIdentity,
+                ]
+            );
 
-            this.logger.log({ message: 'Participant record successfully provisioned in DB', roomId: room.id, userId: p.userId, participantId: participant.id, isOwner });
+            this.logger.log({
+                message: 'Participant registered successfully',
+                roomId: room.id,
+                userId: p.userId,
+                participantId: participant.id,
+                isOwner,
+            });
 
             return {
                 participantId: participant.id,
@@ -163,10 +201,15 @@ export class WatchPartyService {
                 movieId: room.movie_id,
                 ownerId: room.owner_id,
                 maxParticipants: room.max_participants,
-                hasControlPrivilege: participant.has_control_privilege
             };
         } catch (error) {
-            this.logger.error({ message: 'Database failure creating room participant tracking nodes', roomId: room.id, userId: p.userId, error: (error as Error).message });
+            this.logger.error({
+                message: 'Failed to register room participant',
+                roomId: room.id,
+                userId: p.userId,
+                error: (error as Error).message,
+            });
+
             throw error;
         }
     }

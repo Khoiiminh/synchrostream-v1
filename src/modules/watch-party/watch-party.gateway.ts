@@ -137,7 +137,6 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
                 userId: user.id,
                 username: user.username,
                 rtcIdentity: payload.rtcIdentity,
-                hasControlPrivilege: session.hasControlPrivilege,
                 latencyScore: 0
             });
 
@@ -163,7 +162,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
     @UseGuards(WsJwtGuard)
     async handlePlaybackPulse(
         @ConnectedSocket() socket: Socket,
-        @MessageBody() data: { roomId: string; roomCode: string; userId: string; action:'PLAY' | 'PAUSE' | 'SEEK'; playhead: number }
+        @MessageBody() data: { roomId: string; roomCode: string; action:'PLAY' | 'PAUSE' | 'SEEK'; playhead: number }
     ) {
         this.logger.log({
             message: 'Inbound playback pulse received',
@@ -213,11 +212,6 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
             throw new BadRequestException(
                 'Synchronization step failure: State Actor target missing.'
             );
-        }
-
-        if (!actor) {
-            this.logger.warn({ message: 'Sync command rejected: State Actor target absent', roomId: data.roomId, requestingId: user.id });
-            throw new BadRequestException('Synchronization step failure: State Actor target missing.');
         }
 
         try {
