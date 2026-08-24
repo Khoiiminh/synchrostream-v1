@@ -42,3 +42,6 @@ Thumbs.db
 # Useful if you run local SQL mocks before pushing to Aiven
 *.sqlite
 .db
+
+# --- Database Credentials ---
+certs/
