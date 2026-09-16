@@ -116,7 +116,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         this.logger.log({ message: 'Processing room registration request', userId: user.id, roomCode: payload.dto?.roomCode });
 
         try {
-            const session = await this.watchPartyService.associateParticipant({ dto: payload.dto, userId: user.id, rtcIdentity: payload.rtcIdentity });
+            const session = await this.watchPartyService.associateParticipant({ dto: payload.dto, userId: user.id });
 
             let actor = this.runningActors.get(session.roomId);
             if (!actor) {

@@ -92,6 +92,23 @@ export class WatchPartyService {
 
                 const room = roomResult.rows[0];
 
+                const createOwnerParticipantQuery = `
+                    INSERT INTO public.room_participants (
+                        room_id,
+                        user_id,
+                        has_control_privilege
+                    )
+                    VALUES ($1, $2, true)
+                `;
+
+                await transactionClient.query(
+                    createOwnerParticipantQuery,
+                    [
+                        room.id,
+                        p.ownerId,
+                    ],
+                );
+
                 await this.redis.setRoomState(room.room_code, {
                     roomId: room.id,
                     roomCode: room.room_code,
@@ -118,7 +135,7 @@ export class WatchPartyService {
     /**
      * 
      */
-    async associateParticipant(p: {dto: JoinRoomDto, userId: string, rtcIdentity: string}) {
+    async associateParticipant(p: {dto: JoinRoomDto, userId: string}) {
         const cleanCode = p.dto.roomCode.trim().toUpperCase();
 
         const findRoomQuery = `
@@ -168,10 +185,9 @@ export class WatchPartyService {
         const createParticipantQuery = `
             INSERT INTO public.room_participants (
                 room_id,
-                user_id,
-                rtc_identity
+                user_id
             )
-            VALUES ($1, $2, $3)
+            VALUES ($1, $2)
             RETURNING id, room_id
         `;
 
@@ -181,7 +197,6 @@ export class WatchPartyService {
                 [
                     room.id,
                     p.userId,
-                    p.rtcIdentity,
                 ]
             );
 
