@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Request, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
 import { MediaSessionService } from "./media-session.service.js";
@@ -64,6 +64,36 @@ export class MediaSessionController{
     ) {
         return this.mediaOrchestrationService.startMediaSession(
             mediaSessionId,
+        );
+    }
+
+    @Post(':mediaSessionId/connect')
+    @ApiOperation({
+        summary: 'Create MediaSession connection blueprint',
+        description:
+            'Authorizes the authenticated participant and returns the connection information required to connect directly to the assigned SFU.',
+    })
+    @ApiResponse({
+        status: 201,
+        description: 'MediaSession connection blueprint created successfully.',
+    })
+    @ApiResponse({
+        status: 404,
+        description:
+            'MediaSession, participant, or assigned SFU node was not found.',
+    })
+    @ApiResponse({
+        status: 409,
+        description:
+            'MediaSession or assigned SFU node is not available for connection.',
+    })
+    async connectMediaSession(
+        @Param('mediaSessionId') mediaSessionId: string,
+        @Request() request: any,
+    ) {
+        return this.mediaOrchestrationService.createMediaSessionConnection(
+            mediaSessionId,
+            request.user.id,
         );
     }
 
