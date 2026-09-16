@@ -8,6 +8,7 @@ import { InfrastructureModule } from './shared/infrastructure/infrastructure.mod
 import { AdminModule } from './modules/admin/admin.module.js';
 import { MediaModule } from './modules/media/media.module.js';
 import { WatchPartyModule } from './modules/watch-party/watch-party.module.js';
+import { MediaSessionModule } from './modules/media-session/media-session.module.js';
 
 @Module({
     imports: [
@@ -21,6 +22,8 @@ import { WatchPartyModule } from './modules/watch-party/watch-party.module.js';
         AdminModule,
         MediaModule,
         WatchPartyModule,
+
+        MediaSessionModule,
     ],
     controllers: [AppController],
     providers: [AppService],
