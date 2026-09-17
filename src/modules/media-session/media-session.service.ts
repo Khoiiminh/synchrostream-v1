@@ -151,6 +151,42 @@ export class MediaSessionService {
         return this.mapRow(row);
     }
 
+    async getMediaSessionByRoomId(roomId: string): Promise<MediaSession> {
+        const query = `
+            SELECT
+                id,
+                room_id,
+                status,
+                assigned_sfu_node_id,
+                created_at,
+                started_at,
+                ended_at
+            FROM public.media_sessions
+            WHERE room_id = $1
+            AND status IN (
+                'CREATED',
+                'STARTING',
+                'ACTIVE',
+                'ENDING'
+            )
+            ORDER BY created_at DESC
+            LIMIT 1
+        `;
+
+        const [row] = await this.pg.query<any>(
+            query,
+            [roomId],
+        );
+
+        if (!row) {
+            throw new NotFoundException(
+                'The requested watch room does not have an active media session.',
+            );
+        }
+
+        return this.mapRow(row);
+    }
+
     /**
      * Starts the control-plane MediaSession lifecycle.
      *

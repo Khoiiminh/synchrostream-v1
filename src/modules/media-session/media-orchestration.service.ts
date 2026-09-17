@@ -126,6 +126,18 @@ export class MediaOrchestrationService {
         };
     }
 
+    async createMediaSession(roomId: string): Promise<MediaSession> {
+        return this.mediaSessionService.createMediaSession(
+            roomId,
+        );
+    }
+
+    async getMediaSessionByRoomId(roomId: string): Promise<MediaSession> {
+        return this.mediaSessionService.getMediaSessionByRoomId(
+            roomId,
+        );
+    }
+
     async startMediaSession(mediaSessionId: string): Promise<MediaSession> {
         const session = await this.mediaSessionService.getMediaSession(mediaSessionId);
 

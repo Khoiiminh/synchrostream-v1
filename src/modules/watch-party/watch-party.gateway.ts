@@ -5,6 +5,7 @@ import { WatchRoomActor } from "./watch-room.actor.js";
 import { JoinRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { WsJwtGuard } from "../auth/ws-jwt.guard.js";
+import { MediaOrchestrationService } from "../media-session/media-orchestration.service.js";
 
 @WebSocketGateway({
     namespace: 'sync-hub',
@@ -21,6 +22,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
     constructor(
         private readonly watchPartyService: WatchPartyService,
         private readonly redis: RedisProvider,
+        private readonly mediaOrchestrationService: MediaOrchestrationService,
     ) {}
 
     async handleDisconnect(socket: Socket) {
@@ -118,6 +120,23 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         try {
             const session = await this.watchPartyService.associateParticipant({ dto: payload.dto, userId: user.id });
 
+            let mediaSession;
+
+            try {
+                mediaSession = await this.mediaOrchestrationService.getMediaSessionByRoomId(
+                    session.roomId,
+                );
+
+            } catch (error) {
+                mediaSession = await this.mediaOrchestrationService.createMediaSession(
+                    session.roomId,
+                );
+
+                mediaSession = await this.mediaOrchestrationService.startMediaSession(
+                    mediaSession.id,
+                );
+            }
+
             let actor = this.runningActors.get(session.roomId);
             if (!actor) {
                 actor = new WatchRoomActor(
@@ -127,6 +146,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
                     session.ownerId,
                     session.movieId,
                     session.maxParticipants,
+                    mediaSession.id,
                 );
                 this.runningActors.set(session.roomId, actor);
                 this.logger.log({ message: 'Spawning new room tracking actor dynamic context', roomId: session.roomId, roomCode: session.roomCode });
