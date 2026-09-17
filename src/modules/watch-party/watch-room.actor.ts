@@ -26,6 +26,7 @@ export class WatchRoomActor {
         public readonly ownerId: string,
         public readonly movieId: string,
         public readonly maxParticipants: number,
+        public readonly mediaSessionId: string,
     ) {}
 
     public getSnapshot() {
@@ -35,6 +36,7 @@ export class WatchRoomActor {
             passwordPlain: this.passwordPlain,
             ownerId: this.ownerId,
             movieId:this.movieId,
+            mediaSessionId: this.mediaSessionId,
             playback: { ...this.playbackState },
             occupancy: {
                 current: this.participants.size,

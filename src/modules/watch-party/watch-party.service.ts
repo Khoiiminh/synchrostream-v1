@@ -182,51 +182,96 @@ export class WatchPartyService {
             );
         }
 
-        const createParticipantQuery = `
-            INSERT INTO public.room_participants (
-                room_id,
-                user_id
-            )
-            VALUES ($1, $2)
-            RETURNING id, room_id
+        const findParticipantQuery = `
+            SELECT
+                id, 
+                room_id, 
+                user_id,
+                has_control_privilege
+            FROM public.room_participants
+            WHERE room_id = $1
+            AND user_id = $2
+            LIMIT 1
         `;
 
-        try {
-            const [participant] = await this.pg.query<any>(
-                createParticipantQuery,
-                [
-                    room.id,
-                    p.userId,
-                ]
-            );
+        const [existingParticipant] = await this.pg.query<any>(
+            findParticipantQuery,
+            [
+                room.id,
+                p.userId,
+            ]
+        );
+
+        let participant;
+
+        if (existingParticipant) {
+            participant = existingParticipant;
 
             this.logger.log({
-                message: 'Participant registered successfully',
+                messsage: 'Existing room participant reused',
                 roomId: room.id,
                 userId: p.userId,
                 participantId: participant.id,
+                hasControlPrivilege: participant.has_control_privilege,
                 isOwner,
             });
+        } else {
+            const createParticipantQuery = `
+                INSERT INTO public.room_participants (
+                    room_id,
+                    user_id
+                )
+                VALUES ($1, $2)
+                RETURNING id, room_id
+            `;
 
-            return {
-                participantId: participant.id,
-                roomId: room.id,
-                roomCode: room.room_code,
-                passwordPlain: room.password,
-                movieId: room.movie_id,
-                ownerId: room.owner_id,
-                maxParticipants: room.max_participants,
-            };
-        } catch (error) {
-            this.logger.error({
-                message: 'Failed to register room participant',
-                roomId: room.id,
-                userId: p.userId,
-                error: (error as Error).message,
-            });
+            try {
+                const [participant] = await this.pg.query<any>(
+                    createParticipantQuery,
+                    [
+                        room.id,
+                        p.userId,
+                    ]
+                );
 
-            throw error;
+                this.logger.log({
+                    message: 'Participant registered successfully',
+                    roomId: room.id,
+                    userId: p.userId,
+                    participantId: participant.id,
+                    isOwner,
+                });
+
+                return {
+                    participantId: participant.id,
+                    roomId: room.id,
+                    roomCode: room.room_code,
+                    passwordPlain: room.password,
+                    movieId: room.movie_id,
+                    ownerId: room.owner_id,
+                    maxParticipants: room.max_participants,
+                };
+            } catch (error) {
+                this.logger.error({
+                    message: 'Failed to register room participant',
+                    roomId: room.id,
+                    userId: p.userId,
+                    error: (error as Error).message,
+                });
+
+                throw error;
+            }
         }
+
+        return {
+            participantId: participant.id,
+            roomId: room.id,
+            roomCode: room.room_code,
+            passwordPlain: room.password,
+            moviedId: room.movie_id,
+            ownerId: room.owner_id,
+            maxParticipants: room.max_participants,
+        };
     }
 
     async disassociateParticipant(participantId: string): Promise<void> {
