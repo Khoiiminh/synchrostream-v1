@@ -168,7 +168,16 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
             });
 
             await socket.join(session.roomId);
-            this.server.to(session.roomId).emit('room:state_update', actor.getSnapshot());
+
+            const snapshot = actor.getSnapshot();
+
+            this.logger.log({
+                message: 'Emitting room state snapshot',
+                roomId: session.roomId,
+                movieId: snapshot.movieId,
+                mediaSessionId: snapshot.mediaSessionId,
+            });
+            this.server.to(session.roomId).emit('room:state_update', snapshot);
             
             this.logger.log({ message: 'Participant successfully bound to room pipeline', roomId: session.roomId, userId: user.id, socketId: socket.id });
         } catch (error) {

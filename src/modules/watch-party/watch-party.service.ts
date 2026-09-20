@@ -268,7 +268,7 @@ export class WatchPartyService {
             roomId: room.id,
             roomCode: room.room_code,
             passwordPlain: room.password,
-            moviedId: room.movie_id,
+            movieId: room.movie_id,
             ownerId: room.owner_id,
             maxParticipants: room.max_participants,
         };
