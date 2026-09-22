@@ -5,6 +5,7 @@ import { WatchRoomActor } from "./watch-room.actor.js";
 import { JoinRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { WsJwtGuard } from "../auth/ws-jwt.guard.js";
+import { MediaOrchestrationService } from "../media-session/media-orchestration.service.js";
 
 @WebSocketGateway({
     namespace: 'sync-hub',
@@ -21,6 +22,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
     constructor(
         private readonly watchPartyService: WatchPartyService,
         private readonly redis: RedisProvider,
+        private readonly mediaOrchestrationService: MediaOrchestrationService,
     ) {}
 
     async handleDisconnect(socket: Socket) {
@@ -116,7 +118,24 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         this.logger.log({ message: 'Processing room registration request', userId: user.id, roomCode: payload.dto?.roomCode });
 
         try {
-            const session = await this.watchPartyService.associateParticipant({ dto: payload.dto, userId: user.id, rtcIdentity: payload.rtcIdentity });
+            const session = await this.watchPartyService.associateParticipant({ dto: payload.dto, userId: user.id });
+
+            let mediaSession;
+
+            try {
+                mediaSession = await this.mediaOrchestrationService.getMediaSessionByRoomId(
+                    session.roomId,
+                );
+
+            } catch (error) {
+                mediaSession = await this.mediaOrchestrationService.createMediaSession(
+                    session.roomId,
+                );
+
+                mediaSession = await this.mediaOrchestrationService.startMediaSession(
+                    mediaSession.id,
+                );
+            }
 
             let actor = this.runningActors.get(session.roomId);
             if (!actor) {
@@ -127,6 +146,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
                     session.ownerId,
                     session.movieId,
                     session.maxParticipants,
+                    mediaSession.id,
                 );
                 this.runningActors.set(session.roomId, actor);
                 this.logger.log({ message: 'Spawning new room tracking actor dynamic context', roomId: session.roomId, roomCode: session.roomCode });
@@ -148,7 +168,16 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
             });
 
             await socket.join(session.roomId);
-            this.server.to(session.roomId).emit('room:state_update', actor.getSnapshot());
+
+            const snapshot = actor.getSnapshot();
+
+            this.logger.log({
+                message: 'Emitting room state snapshot',
+                roomId: session.roomId,
+                movieId: snapshot.movieId,
+                mediaSessionId: snapshot.mediaSessionId,
+            });
+            this.server.to(session.roomId).emit('room:state_update', snapshot);
             
             this.logger.log({ message: 'Participant successfully bound to room pipeline', roomId: session.roomId, userId: user.id, socketId: socket.id });
         } catch (error) {

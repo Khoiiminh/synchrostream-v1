@@ -5,14 +5,27 @@ import { WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyGateway } from "./watch-party.gateway.js";
 import { WatchPartyController } from "./watch-party.controller.js";
 import { LiveKitTokenService } from "./livekit-token.service.js";
+import { MediaSessionModule } from "../media-session/media-session.module.js";
 
 @Module({
     imports: [
         InfrastructureModule,
+        MediaSessionModule,
         JwtModule.register({ secret: process.env.JWT_SECRET || 'fallback-secret-key' }),
     ],
-    controllers: [WatchPartyController],
-    providers: [WatchPartyGateway, WatchPartyService, LiveKitTokenService],
-    exports: [WatchPartyService]
+    
+    controllers: [
+        WatchPartyController
+    ],
+
+    providers: [
+        WatchPartyGateway, 
+        WatchPartyService, 
+        LiveKitTokenService,
+    ],
+
+    exports: [
+        WatchPartyService,
+    ]
 })
 export class WatchPartyModule {}
