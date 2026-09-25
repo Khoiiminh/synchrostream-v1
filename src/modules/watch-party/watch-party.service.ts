@@ -165,6 +165,26 @@ export class WatchPartyService {
             );
         }
 
+        // Check the user already participating in another active room
+        const existingActiveMembershipQuery = `
+        SELECT rp.room_id, r.room_code
+        FROM public.room_participants rp
+        INNER JOIN public.rooms r ON r.id = rp.room_id
+        WHERE rp.user_id = $1
+            AND r.is_active = true
+            AND r.id <> $2
+        LIMIT 1`;
+
+        const [existingActiveMembership] = await this.pg.query<any>(existingActiveMembershipQuery, [p.userId, room.id]);
+
+        if (existingActiveMembership) {
+            if (existingActiveMembership) {
+                throw new ConflictException(
+                    `You are already participating in room ${existingActiveMembership.room_code}. Leave that room before joining another one.`
+                );
+            }
+        }
+
         const isOwner = p.userId === room.owner_id;
 
         // Owner joins without supplying the room password.
