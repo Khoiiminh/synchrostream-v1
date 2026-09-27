@@ -54,7 +54,7 @@ export class MediaOrchestrationService {
             LIMIT 1
         `;
 
-        const [participant] = await this.pg.query<{
+        const participant = await this.pg.query<{
             participant_id: string;
             user_id: string;
             room_id: string;
@@ -66,7 +66,7 @@ export class MediaOrchestrationService {
             ],
         );
 
-        if (!participant) {
+        if (!participant || participant.rows.length < 1) {
             throw new NotFoundException(
                 "The authenticated user is not a participant of the MediaSession room.",
             );
@@ -84,7 +84,7 @@ export class MediaOrchestrationService {
             LIMIT 1
         `;
 
-        const [node] = await this.pg.query<{
+        const node = await this.pg.query<{
             id: string;
             node_id: string;
             endpoint: string;
@@ -95,33 +95,33 @@ export class MediaOrchestrationService {
             [session.assignedSfuNodeId],
         );
 
-        if (!node) {
+        if (!node || node.rows.length < 1) {
             throw new NotFoundException(
                 `Assigned SFU node ${session.assignedSfuNodeId} does not exist.`,
             );
         }
 
         if (
-            node.status !== "HEALTHY" &&
-            node.status !== "DEGRADED"
+            node.rows[0].status !== "HEALTHY" &&
+            node.rows[0].status !== "DEGRADED"
         ) {
             throw new ConflictException(
-                `Assigned SFU node ${node.node_id} is not available.`,
+                `Assigned SFU node ${node.rows[0].node_id} is not available.`,
             );
         }
 
         const signalingToken = this.sfuSignalingTokenService.generateToken({
             sub: userId,
             mediaSessionId: session.id,
-            participantId: participant.participant_id,
-            nodeId: node.node_id,
+            participantId: participant.rows[0].participant_id,
+            nodeId: node.rows[0].node_id,
         });
 
         return {
             mediaSessionId: session.id,
-            participantId: participant.participant_id,
-            sfuNodeId: node.node_id,
-            signalingEndpoint: node.signaling_endpoint,
+            participantId: participant.rows[0].participant_id,
+            sfuNodeId: node.rows[0].node_id,
+            signalingEndpoint: node.rows[0].signaling_endpoint,
             signalingToken,
         };
     }
@@ -191,7 +191,7 @@ export class MediaOrchestrationService {
             LIMIT 1
         `;
 
-        const [row] = await this.pg.query<{
+        const row = await this.pg.query<{
             id: string;
             node_id: string;
             endpoint: string;
@@ -201,20 +201,20 @@ export class MediaOrchestrationService {
             last_heartbeat_at: Date | null;
         }>(query);
 
-        if (!row) {
+        if (!row || row.rows.length < 1) {
             throw new ConflictException(
                 'No available SFU node is currently available.',
             );
         }
 
         return {
-            id: row.id,
-            nodeId: row.node_id,
-            endpoint: row.endpoint,
-            signalingEndpoint: row.signaling_endpoint,
-            status: row.status,
-            capacity: row.capacity,
-            lastHeartbeatAt: row.last_heartbeat_at,
+            id: row.rows[0].id,
+            nodeId: row.rows[0].node_id,
+            endpoint: row.rows[0].endpoint,
+            signalingEndpoint: row.rows[0].signaling_endpoint,
+            status: row.rows[0].status,
+            capacity: row.rows[0].capacity,
+            lastHeartbeatAt: row.rows[0].last_heartbeat_at,
         };
     }
 
@@ -246,14 +246,14 @@ export class MediaOrchestrationService {
             LIMIT 1
         `;
 
-        const [node] = await this.pg.query<{
+        const node = await this.pg.query<{
             id: string;
             node_id: string;
             endpoint: string;
             status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
         }>(nodeQuery, [nodeId]);
 
-        if (!node) {
+        if (!node || node.rows.length < 1) {
             throw new ConflictException(
                 `Assigned SFU node ${nodeId} does not exist.`,
             );
@@ -264,7 +264,7 @@ export class MediaOrchestrationService {
         );
 
         await this.sfuControlClient.endMediaSession(
-            node.endpoint,
+            node.rows[0].endpoint,
             mediaSessionId,
         );
 

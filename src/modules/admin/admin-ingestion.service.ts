@@ -99,8 +99,8 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
 
     async initiateMovieUpload(dto: InitiateUploadDto): Promise<{ movieId: string, uploadId: string, objectKey: string }> {
         const objectIdQuery = `SELECT uuid_generate_v4() AS id;`;
-        const [row] = await this.pg.query<{ id: string }>(objectIdQuery);
-        const movieId = row.id;
+        const row = await this.pg.query<{ id: string }>(objectIdQuery);
+        const movieId = row.rows[0].id;
 
         const objectKey = `raw-mezzanines/${movieId}.mp4`;
 

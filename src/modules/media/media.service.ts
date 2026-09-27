@@ -25,8 +25,8 @@ export class MediaService {
 
         let movie: any;
         try {
-            const [result] = await this.pg.query<any>(query, [movieId]);
-            movie = result;
+            const result = await this.pg.query<any>(query, [movieId]);
+            movie = result.rows[0];
         } catch (dbError) {
             this.logger.error({ message: 'Database connection execution fault during media query', movieId, error: (dbError as Error).message }, (dbError as Error).stack);
             throw dbError;
@@ -82,7 +82,7 @@ export class MediaService {
         `;
 
         const records = await this.pg.query<any>(queryText);
-        return records.map((movie) => {
+        return records.rows.map((movie) => {
             let parsedMetadata = {};
             
             if (movie.metadata) {
