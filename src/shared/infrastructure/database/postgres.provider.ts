@@ -1,4 +1,4 @@
-import { Pool, PoolClient } from 'pg';
+import { Pool, PoolClient, QueryResult } from 'pg';
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
@@ -33,9 +33,9 @@ export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
     /**
      * Executes a Plain SQL query using Parameterized Queries to prevent Injection[cite: 1, 4].
      */
-    async query<T>(text: string, params?: any[]): Promise<T[]> {
+    async query<T>(text: string, params?: any[]): Promise<QueryResult<any>> {
         const res = await this.pool.query(text, params);
-        return res.rows as T[];
+        return res;
     }
 
     /**

@@ -4,7 +4,6 @@ export interface ParticipantNode {
     participantId: string;
     userId: string;
     username: string;
-    rtcIdentity: string;
     latencyScore: number;
 }
 
@@ -14,10 +13,16 @@ export interface PlaybackState {
     lastUpdated: number;
 }
 
+// The actor is runtime state. PostgreSQL is persistence. Redis is shared runtime projection.
+
 export class WatchRoomActor {
     private readonly logger = new Logger(WatchRoomActor.name);
     private readonly participants = new Map<string, ParticipantNode>();
-    private playbackState: PlaybackState = { playhead: 0, status: 'PAUSED', lastUpdated: Date.now() };
+    private playbackState: PlaybackState = { 
+        playhead: 0, 
+        status: 'PAUSED', 
+        lastUpdated: Date.now() 
+    };
 
     constructor(
         public readonly roomId: string,
@@ -37,7 +42,9 @@ export class WatchRoomActor {
             ownerId: this.ownerId,
             movieId:this.movieId,
             mediaSessionId: this.mediaSessionId,
-            playback: { ...this.playbackState },
+            playback: { 
+                ...this.playbackState 
+            },
             occupancy: {
                 current: this.participants.size,
                 max: this.maxParticipants
@@ -47,10 +54,20 @@ export class WatchRoomActor {
     }
 
     public registerParticipant(node: ParticipantNode): void {
-        if (this.participants.size >= this.maxParticipants && this.participants.has(node.userId)) {
-            this.logger.warn({ message: 'Participant registration blocked: Room capacity threshold violated', roomId: this.roomId, currentSize: this.participants.size, cap: this.maxParticipants, userId: node.userId });
+        const existingParticipant = this.participants.has(node.userId);
+
+        if (!existingParticipant && this.participants.size >= this.maxParticipants) {
+            this.logger.warn({
+                message: 'Participant registration blocked: Room capacity threshold violated',
+                roomId: this.roomId,
+                currentSize: this.participants.size,
+                cap: this.maxParticipants,
+                userId: node.userId,
+            });
+
             throw new BadRequestException(`Room capacity overflow limit reached. Cap: ${this.maxParticipants}`);
-        }
+        };
+
         this.participants.set(node.userId, node);
     }
 
@@ -93,27 +110,15 @@ export class WatchRoomActor {
                     : this.playbackState.status,
             lastUpdated: Date.now(),
         }
-        // const actingMember = this.participants.get(p.requestingId);
 
-        // const isOwner = p.requestingId === this.ownerId;
-        // const hasPrivilege = actingMember?.hasControlPrivilege === true;
-
-        // if (!isOwner && !hasPrivilege) {
-        //     this.logger.warn({ message: 'Playback transformation rule validation failed: Insufficient permissions framework', roomId: this.roomId, requestingId: p.requestingId, action: p.action });
-        //     throw new BadRequestException('Action rejected: Insufficient track sync control privileges.');
-        // }
-
-        // this.playbackState = {
-        //     playhead: p.targetPlayhead,
-        //     status: p.action === 'PLAY' ? 'PLAYING' : p.action === 'PAUSE' ? 'PAUSED': this.playbackState.status,
-        //     lastUpdated: Date.now(),
-        // };
-
-        return this.playbackState;
+        return {
+            ...this.playbackState
+        };
     }
 
     public updateTelemetry(p: {userId: string, score: number}): void {
         const member = this.participants.get(p.userId);
+
         if (member) {
             member.latencyScore = p.score;
         }
