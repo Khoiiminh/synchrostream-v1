@@ -30,22 +30,22 @@ export class WsJwtGuard implements CanActivate {
                 secret: this.configService.get<string>('JWT_SECRET')
             });
 
-            const [user] = await this.pg.query<any>(
+            const user = await this.pg.query<any>(
                 'SELECT id, username, email, role FROM users WHERE id = $1',
                 [payload.sub || payload.id]
             );
 
-            if (!user) {
+            if (!user || user.rows.length < 1) {
                 throw new WsException('User profile matching token signature not found.');
             }
 
             // Append authenticated state context onto the active socket instance
             client.data = {
                 user: {
-                    id: user.id,
-                    username: user.username,
-                    email: user.email,
-                    role: user.role
+                    id: user.rows[0].id,
+                    username: user.rows[0].username,
+                    email: user.rows[0].email,
+                    role: user.rows[0].role
                 }
             };
 

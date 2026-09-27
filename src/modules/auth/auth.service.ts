@@ -31,55 +31,55 @@ export class AuthService {
       [dto.email, dto.username],
     );
 
-    if (existing.length > 0) {
+    if (existing.rows.length > 0) {
       this.logger.warn(`Registration failed: Account already exists for ${dto.email}`);
       throw new ConflictException("Account already exists");
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
-    const [newUser] = await this.pg.query<{ id: string }>(
+    const newUser = await this.pg.query<{ id: string }>(
       "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
       [dto.username, dto.email, passwordHash],
     );
 
-    this.logger.log(`User successfully created with ID: ${newUser.id}`);
-    return { message: "Success: Account Created", userId: newUser.id };
+    this.logger.log(`User successfully created with ID: ${newUser.rows[0].id}`);
+    return { message: "Success: Account Created", userId: newUser.rows[0].id };
   }
 
   async login(dto: LoginDto) {
     this.logger.log(`Login attempt for email: ${dto.email}`);
 
-    const [user] = await this.pg.query<any>(
+    const user = await this.pg.query<any>(
       "SELECT id, username, email, password_hash, role FROM users WHERE email = $1",
       [dto.email],
     );
 
-    if (!user || !(await bcrypt.compare(dto.password, user.password_hash))) {
+    if (!user || !(await bcrypt.compare(dto.password, user.rows[0].password_hash))) {
       this.logger.warn(`Failed login attempt for email: ${dto.email}`);
       throw new UnauthorizedException("Invalid Credentials");
     }
 
-    const payload = { sub: user.id, username: user.username, role: user.role };
+    const payload = { sub: user.rows[0].id, username: user.rows[0].username, role: user.rows[0].role };
 
-    const expiresIn = user.role === "ADMIN" ? "1h" : "7d";
+    const expiresIn = user.rows[0].role === "ADMIN" ? "1h" : "7d";
     const token = this.jwtService.sign(payload, { expiresIn });
 
     await this.redis["client"].set(
-      `user:${user.id}:session`,
+      `user:${user.rows[0].id}:session`,
       token,
       "EX",
       86400,
     );
 
-    this.logger.log(`User ${user.id} logged in successfully. Role: ${user.role}`);
+    this.logger.log(`User ${user.rows[0].id} logged in successfully. Role: ${user.rows[0].role}`);
     
     return { 
       user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role
+        id: user.rows[0].id,
+        username: user.rows[0].username,
+        email: user.rows[0].email,
+        role: user.rows[0].role
       },
       access_token: token 
     };
@@ -124,13 +124,13 @@ export class AuthService {
       WHERE id = $1;
     `;
 
-    const [user] = await this.pg.query<any>(query, [userId]);
+    const user = await this.pg.query<any>(query, [userId]);
 
-    if (!user || user.length === 0) {
+    if (!user || user.rows.length === 0) {
       this.logger.error(`User not found`);
       throw new NotFoundException('The requested user session profile could not be located.');
     }
 
-    return user;
+    return user.rows[0];
   }
 }

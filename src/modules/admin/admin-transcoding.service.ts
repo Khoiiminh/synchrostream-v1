@@ -53,12 +53,12 @@ export class AdminTranscodingService implements OnModuleInit {
         const checkMovieQuery = `SELECT id, status FROM movies WHERE id = $1`;
         const movies = await this.pg.query<{ id: string, status: string}>(checkMovieQuery, [movieId]);
 
-        if (!movies || movies.length === 0) {
+        if (!movies || movies.rows.length === 0) {
             this.logger.warn(`Transcode aborted: Movie ID ${movieId} not found in database`);
             throw new NotFoundException("Requested movie profile not found in database.");
         }
 
-        const targetMovie = movies[0];
+        const targetMovie = movies.rows[0];
         const mezzanineKey = `raw-mezzanines/${targetMovie.id}.mp4`;
 
         this.logger.log(`Movie ${movieId} verified. Handing off to execution pipeline...`);

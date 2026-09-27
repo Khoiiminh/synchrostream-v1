@@ -66,12 +66,12 @@ export class PasswordService implements OnModuleInit {
     async requestReset(dto: RequestResetDto) {
         this.logger.log(`Password reset request for email: ${dto.email}`);
 
-        const [user] = await this.pg.query<any>(
+        const user = await this.pg.query<any>(
             'SELECT id FROM users WHERE email = $1',
             [dto.email]
         );
 
-        if (!user) {
+        if (!user || user.rows.length < 1) {
             // Log as warn, but won't throw to prevent email enumeration attacks
             this.logger.warn(`Reset requested for non-existent email: ${dto.email}`);
             return {
@@ -86,11 +86,11 @@ export class PasswordService implements OnModuleInit {
 
         this.tokenTTL = ttl;
 
-        this.logger.debug(`Generate reset token for user ID: ${user.id}`);
+        this.logger.debug(`Generate reset token for user ID: ${user.rows[0].id}`);
 
         await this.pg.query(
             'UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3',
-            [token, expiresAt, user.id]
+            [token, expiresAt, user.rows[0].id]
         );
 
         try {
@@ -136,12 +136,12 @@ export class PasswordService implements OnModuleInit {
     async resetPassword(dto: ResetPasswordDto) {
         this.logger.log(`Attempting password reset with token: ${dto.token.substring(0, 10)}...`);
 
-        const [user] = await this.pg.query<any>(
+        const user = await this.pg.query<any>(
             'SELECT id FROM users WHERE reset_token = $1',
             [dto.token]
         );
 
-        if (!user) {
+        if (!user || user.rows.length < 1) {
             this.logger.error(`Reset failed: Token is invalid or has expired`);
             throw new BadRequestException('Invalid or expired token')
         };
@@ -149,14 +149,14 @@ export class PasswordService implements OnModuleInit {
         const newHash = await bcrypt.hash(dto.newPassword, 10);
 
         await this.pg.withTransaction(async (client) => {
-            await client.query('UPDATE users SET password_hash = $1 where id = $2', [newHash, user.id]);
-            await client.query('UPDATE users SET reset_token = NULL, reset_expires = NULL where id = $1', [user.id]);
-            this.logger.log(`Password updated and tokens cleared for user: ${user.id}`);
+            await client.query('UPDATE users SET password_hash = $1 where id = $2', [newHash, user.rows[0].id]);
+            await client.query('UPDATE users SET reset_token = NULL, reset_expires = NULL where id = $1', [user.rows[0].id]);
+            this.logger.log(`Password updated and tokens cleared for user: ${user.rows[0].id}`);
         });
 
         return { 
             message: 'Password updated successfully',
-            userId: user.id, 
+            userId: user.rows[0].id, 
         };
     }
 }
