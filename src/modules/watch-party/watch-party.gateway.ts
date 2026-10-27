@@ -31,15 +31,19 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
       roomId: string;
       roomCode: string;
       userId: string;
+      isOwner: boolean;
     }
   >();
 
   private readonly pendingCleanups = new Map<string, NodeJS.Timeout>();
 
+  private getCleanupKey(userId: string, roomId: string): string {
+    return `${userId}:${roomId}`;
+  }
+
   constructor(
     private readonly watchPartyService: WatchPartyService,
     private readonly redis: RedisProvider,
-    private readonly mediaOrchestrationService: MediaOrchestrationService,
     private readonly liveKitService: LiveKitService,
   ) {}
 
@@ -71,16 +75,15 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
     this.socketToParticipantMap.delete(socket.id);
 
     /*
-     * There can only be one pending cleanup for a user.
-     *
-     * If the user somehow has multiple stale sockets, cancel the old
-     * cleanup before creating a new one.
+     * Keep cleanup scoped to this user's membership in this specific room.
+     * A new room must not cancel retries for an older room being terminated.
      */
-    const existingCleanup = this.pendingCleanups.get(metadata.userId);
+    const cleanupKey = this.getCleanupKey(metadata.userId, metadata.roomId);
+    const existingCleanup = this.pendingCleanups.get(cleanupKey);
 
     if (existingCleanup) {
       clearTimeout(existingCleanup);
-      this.pendingCleanups.delete(metadata.userId);
+      this.pendingCleanups.delete(cleanupKey);
     }
 
     const cleanupTimeoutId = setTimeout(async () => {
@@ -93,28 +96,19 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
          * Therefore this timeout is no longer authoritative if the
          * map no longer points to this exact timeout.
          */
-        const currentCleanup = this.pendingCleanups.get(metadata.userId);
+        const currentCleanup = this.pendingCleanups.get(cleanupKey);
 
         if (currentCleanup !== cleanupTimeoutId) {
           return;
         }
 
-        this.pendingCleanups.delete(metadata.userId);
+        this.pendingCleanups.delete(cleanupKey);
 
         const actor = this.runningActors.get(metadata.roomId);
-
-        /*
-         * IMPORTANT:
-         *
-         * Do not determine ownership from the participant record.
-         * The actor is the runtime representation of the room and
-         * already knows who the owner is.
-         */
-        const isOwner =
-          actor !== undefined && actor.ownerId === metadata.userId;
+        const isOwner = metadata.isOwner || actor?.ownerId === metadata.userId;
 
         if (isOwner) {
-          await this.handleOwnerDisconnectCleanup(metadata, actor);
+          await this.handleOwnerDisconnectCleanup(metadata);
         } else {
           await this.handleParticipantDisconnectCleanup(metadata, actor);
         }
@@ -126,10 +120,51 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
           roomId: metadata.roomId,
           error: (error as Error).message,
         });
+
+        const actor = this.runningActors.get(metadata.roomId);
+        if (metadata.isOwner || actor?.ownerId === metadata.userId) {
+          this.scheduleOwnerCleanupRetry(metadata);
+        }
       }
     }, 10000);
 
     this.pendingCleanups.set(metadata.userId, cleanupTimeoutId);
+  }
+
+  private scheduleOwnerCleanupRetry(
+    metadata: {
+      participantId: string;
+      roomId: string;
+      roomCode: string;
+      userId: string;
+      isOwner: boolean;
+    }
+  ): void {
+    const cleanupKey = this.getCleanupKey(metadata.userId, metadata.roomId);
+
+    // Keep retrying failed owner cleanup instead of leaving an active room
+    // permanently stuck after a transient LiveKit or database failure
+    const retryTimeoutId = setTimeout(async () => {
+      if (this.pendingCleanups.get(cleanupKey) !== retryTimeoutId) {
+        return;
+      }
+
+      this.pendingCleanups.delete(cleanupKey);
+
+      try {
+        await this.handleOwnerDisconnectCleanup(metadata);
+      } catch (error) {
+        this.logger.error({
+          message: "Owner room cleanup retry failed; scheduling another attempt",
+          roomId: metadata.roomId,
+          userId: metadata.userId,
+          error: (error as Error).message,
+        });
+        this.scheduleOwnerCleanupRetry(metadata);
+      }
+    }, 5000);
+
+    this.pendingCleanups.set(cleanupKey, retryTimeoutId);
   }
 
   private async handleOwnerDisconnectCleanup(
@@ -138,8 +173,8 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
       roomId: string;
       roomCode: string;
       userId: string;
+      isOwner: boolean;
     },
-    actor: WatchRoomActor,
   ): Promise<void> {
     this.logger.log({
       message: "Owner grace period expired. Cleaning up entire room engine.",
@@ -150,36 +185,33 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
 
     /*
      * Notify everybody before the room is destroyed.
+     *
+     * First make the room unavailable to new joins. Provider shutdown is a
+     * separate operation and is retried if LiveKit is temporarily unavailable.
      */
+    const result = await this.watchPartyService.leaveRoomSession(
+      metadata.userId,
+      metadata.roomId
+    );
+
+    // The persistent room is now available to new joins. Notify and disconnect
+    // current clients even if provider teardown needs a retry.
     this.server.to(metadata.roomId).emit("room:terminated", {
       message:
         "The room host has left the session. This watch room has been closed.",
     });
 
-    /*
-     * The service owns persistent room cleanup:
-     *
-     * - rooms.is_active = false
-     * - participant records removed
-     * - Redis room state deleted
-     */
-    const result = await this.watchPartyService.leaveRoomSession(
-      metadata.userId,
-    );
+    const sockets = await this.server.in(metadata.roomId).fetchSockets();
+    for (const clientSocket of sockets) {
+      clientSocket.disconnect(true);
+    }
+
+    await this.liveKitService.endMediaSessionForRoom(metadata.roomId);
 
     /*
      * The actor is no longer valid after the room has been destroyed.
      */
     this.runningActors.delete(metadata.roomId);
-
-    /*
-     * Disconnect every remaining socket in the room.
-     */
-    const sockets = await this.server.in(metadata.roomId).fetchSockets();
-
-    for (const clientSocket of sockets) {
-      clientSocket.disconnect(true);
-    }
 
     this.logger.log({
       message: "Owner room cleanup completed",
@@ -303,24 +335,19 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
      * The participant row remains active in PostgreSQL, so
      * associateParticipant() will reuse that same row.
      */
-    const pendingCleanup = this.pendingCleanups.get(user.id);
-
-    if (pendingCleanup) {
-      clearTimeout(pendingCleanup);
-      this.pendingCleanups.delete(user.id);
-
-      this.logger.log({
-        message:
-          "User reconnected within grace window. Cancelled scheduled participant cleanup.",
-        userId: user.id,
-      });
-    }
-
     this.logger.log({
       message: "Processing room registration request",
       userId: user.id,
       roomCode: payload.dto?.roomCode,
     });
+
+    let associatedSession:
+      | Awaited<ReturnType<WatchPartyService["associateParticipant"]>>
+      | undefined;
+    let actorForCompensation: WatchRoomActor | undefined;
+    let participantRegistered = false;
+    let socketJoinedRoom = false;
+    const staleSocketIds: string[] = [];
 
     try {
       /*
@@ -335,25 +362,31 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
        * - reuses an active participant row on reconnect
        * - creates a NEW participant row for a genuinely new join
        */
-      const session = await this.watchPartyService.associateParticipant({
+      const session = (associatedSession = await this.watchPartyService.associateParticipant({
         dto: payload.dto,
         userId: user.id,
-      });
+      }));
+
+      // Cancel the grace timer only after the credentials and membership have
+      // been validated. If a later handshake stage fails, the catch path restores
+      // disconnect cleanup for a reused membership.
+      const cleanupKey = this.getCleanupKey(user.id, session.roomId);
+      const pendingCleanup = this.pendingCleanups.get(cleanupKey);
+      if (pendingCleanup) {
+        clearTimeout(pendingCleanup);
+        this.pendingCleanups.delete(cleanupKey);
+      }
 
       /*
        * --------------------------------------------------------
        * MEDIA SESSION LIFECYCLE
        * --------------------------------------------------------
        */
-      let mediaSession;
-
-      try {
-        mediaSession = await this.mediaOrchestrationService.getMediaSessionByRoomId(
-            session.roomId,
-          );
-      } catch (error) {
-        mediaSession = await this.liveKitService.createMediaSession(session.roomId);
-      }
+      // LiveKit is the active provider. The self-built SFU control plane must
+      // not create or select sessions for the current watch-party runtime.
+      const mediaSession = await this.liveKitService.getOrCreateMediaSession(
+        session.roomId,
+      );
 
       /*
        * --------------------------------------------------------
@@ -408,6 +441,8 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         });
       }
 
+      actorForCompensation = actor;
+
       /*
        * --------------------------------------------------------
        * RUNTIME PARTICIPANT PROJECTION
@@ -426,6 +461,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         username: user.username,
         latencyScore: 0,
       });
+      participantRegistered = true;
 
       /*
        * If the user already had another socket, replace its
@@ -443,7 +479,7 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
           existingMetadata.roomId === session.roomId &&
           existingSocketId !== socket.id
         ) {
-          this.socketToParticipantMap.delete(existingSocketId);
+          staleSocketIds.push(existingSocketId);
 
           this.logger.debug?.({
             message:
@@ -460,9 +496,11 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         roomId: session.roomId,
         roomCode: session.roomCode,
         userId: user.id,
+        isOwner: session.ownerId === user.id,
       });
 
       await socket.join(session.roomId);
+      socketJoinedRoom = true;
 
       /*
        * --------------------------------------------------------
@@ -510,7 +548,80 @@ export class WatchPartyGateway implements OnGatewayDisconnect {
         participantId: session.participantId,
         socketId: socket.id,
       });
+
+      for (const staleSocketId of staleSocketIds) {
+        this.socketToParticipantMap.delete(staleSocketId);
+        this.server.sockets.sockets.get(staleSocketId)?.disconnect(true);
+      }
+
     } catch (error) {
+      if (associatedSession) {
+        const session = associatedSession;
+        const cleanupKey = this.getCleanupKey(user.id, session.roomId);
+        const hasOtherBoundSocket = Array.from(
+          this.socketToParticipantMap.entries(),
+        ).some(([socketId, metadata]) => {
+          return (
+            socketId !== socket.id &&
+            metadata.userId === user.id &&
+            metadata.roomId === session.roomId
+          );
+        });
+
+        this.socketToParticipantMap.delete(socket.id);
+
+        if (socketJoinedRoom) {
+          try {
+            await socket.leave(session.roomId);
+          } catch (leaveError) {
+            this.logger.warn({
+              message: "Failed to remove socket from room after enrollment failure",
+              roomId: session.roomId,
+              socketId: socket.id,
+              error: (leaveError as Error).message,
+            });
+          }
+        }
+
+        if (participantRegistered && actorForCompensation && !hasOtherBoundSocket) {
+          actorForCompensation.evictParticipantByUserId(user.id);
+          if (actorForCompensation.getParticipantCount() === 0) {
+            this.runningActors.delete(session.roomId);
+          }
+        }
+
+        if (session.createdMembership && !hasOtherBoundSocket) {
+          try {
+            await this.watchPartyService.disassociateParticipant(session.participantId);
+          } catch (compensationError) {
+            this.logger.error({
+              message: "Failed to compensate participant membership after handshake failure",
+              participantId: session.participantId,
+              roomId: session.roomId,
+              userId: user.id,
+              error: (compensationError as Error).message,
+            });
+          }
+        } else if (!session.createdMembership && !hasOtherBoundSocket) {
+          // The existing membership remains active for the grace window. Rebind
+          // metadata so disconnect handling schedules cleanup instead of orphaning it.
+          this.socketToParticipantMap.set(socket.id, {
+            participantId: session.participantId,
+            roomId: session.roomId,
+            roomCode: session.roomCode,
+            userId: user.id,
+            isOwner: session.ownerId === user.id,
+          });
+        }
+
+        // A failed handshake must not cancel the prior grace cleanup permanently.
+        const pendingCleanup = this.pendingCleanups.get(cleanupKey);
+        if (pendingCleanup && !session.createdMembership) {
+          clearTimeout(pendingCleanup);
+          this.pendingCleanups.delete(cleanupKey);
+        }
+      }
+
       this.logger.warn({
         message: "Room connection enrollment failure intercepted",
         userId: user.id,

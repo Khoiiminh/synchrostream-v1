@@ -4,6 +4,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { ApiProperty } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import { IsInt, IsOptional, IsString, IsUUID, Length, Max, Min } from "class-validator";
+import { RedisRetryHelper } from "../retry/redis-retry.helper.js";
 
 export class CreateRoomDto {
     @ApiProperty({ description: 'Explicit 6-character room tracking sequence code', example: 'A1B2C3' })
@@ -30,10 +31,19 @@ export class CreateRoomDto {
 }
 
 export class JoinRoomDto {
-    @ApiProperty({ description: 'Target 6-character room code to match against active sessions', example: 'A1B2C3' })
+    @ApiProperty({ 
+        description: 'Target 6-character room code to match against active sessions', 
+        example: 'A1B2C3' 
+    })
+    @IsString()
+    @Length(6, 6)
     roomCode!: string;
 
-    @ApiProperty({ description: 'Plain text password entry to verify against target room authorization', example: 'SecurePass123' })
+    @ApiProperty({ 
+        description: 'Plain text password entry to verify against target room authorization', 
+        example: 'SecurePass123' 
+    })
+    @IsString()   
     passwordPlain!: string;
 }
 
@@ -44,10 +54,43 @@ export class WatchPartyService {
     constructor(
         private readonly pg: PostgresProvider,
         private readonly redis: RedisProvider,
+        private readonly redisRetryHelper: RedisRetryHelper,
     ) {}
 
-    /** 
-     * Initializes watch room settings within PostgreSQL using explicit DDL keys
+    /**
+     * Initializes a watch room session within PostgreSQL with concurrency control,
+     * validates constraints, and projects the initial state into Redis.
+     * 
+     * ### Workflow & Mechanism
+     * 1. **Advisory Locking**: Acquires a PostgreSQL session-level advisory transaction lock 
+     *    (`pg_advisory_xact_lock`) scoped to the owner ID. This serializes concurrent room 
+     *    creation requests, even across multiple backend instances.
+     * 2. **Constraint Validation**: 
+     *    - Checks if the user already owns an active room (`is_active = true`).
+     *    - Automatically cleans up stale memberships linked to inactive rooms.
+     *    - Verifies if the user is currently an active participant in any other room.
+     * 3. **PostgreSQL Persistence**: Inserts the new room record and registers the owner 
+     *    as an active participant with control privileges within a database transaction.
+     * 4. **Redis Projection & Compensation (Saga Pattern)**: 
+     *    - Initializes the runtime room state in Redis using exponential backoff retry.
+     *    - If Redis synchronization fails after the database transaction commits, a compensation 
+     *    step runs to clean up the partial Redis key and mark the database records as inactive 
+     *    to prevent orphan/zombie rooms.
+     * 
+     * ### Usage Example
+     * ```ts
+     * const room = await this.watchPartyService.createRoomSession({
+     *     dto: { roomCode: 'ROOM123', passwordPlain: 'secret', movieId: 'movie-uuid' },
+     *     ownerId: 'user-uuid-123'
+     * });
+     * ```
+     * 
+     * @param p An object containing the room creation payload and owner identifier.
+     * @param p.dto Data Transfer Object containing room settings (`roomCode`, `passwordPlain`, `movieId`, `maxParticipants`).
+     * @param p.ownerId The unique UUID of the user attempting to create the room.
+     * @returns A promise that resolves with the created room's metadata (`roomId`, `roomCode`, `maxParticipants`).
+     * @throws {ConflictException} Throws if the user already owns an active room or is participating in another active room.
+     * @throws {Error} Throws if database queries fail or if Redis synchronization and its subsequent compensation fail.
      */
     async createRoomSession(p: {dto: CreateRoomDto, ownerId: string}) {
         this.logger.log({
@@ -56,55 +99,75 @@ export class WatchPartyService {
             movieId: p.dto.movieId,
         });
 
-        // 1. Check if an active allocation exists for this user
-        const activeCheckQuery = `
-            SELECT id, room_code
-            FROM public.rooms
-            WHERE owner_id = $1
-            AND is_active = true
-        `;
+        const cleanRoomCode = p.dto.roomCode.trim().toUpperCase();
 
-        const existingRoom = await this.pg.query<any>(activeCheckQuery, [p.ownerId]);
+        // An active room must be terminated through the gateway lifecycle first.
+        // The advisory transaction lock serializes room creation for one owner,
+        // including requests handled by different backend instances.
 
-        if (existingRoom.rows.length > 0) {
-            const staleRoom = existingRoom.rows[0];
-
-            this.logger.warn({ 
-                message: 'Overriding stale room session allocation detected during new creation request', 
-                ownerId: p.ownerId, 
-                staleRoomId: staleRoom.id,
-                staleRoomCode: staleRoom.room_code
-            });
-
-            // 2. FORWARD-CLEANUP: make as inactive
-            await this.pg.withTransaction(async (transactionClient) => {
-                await transactionClient.query(
-                    `
-                    UPDATE public.rooms
-                    SET is_active = false
-                    WHERE id = $1
-                    `,
-                    [staleRoom.id],
-                );
-
-                await transactionClient.query(
-                    `
-                    UPDATE public.room_participants
-                    SET is_active = false,
-                        left_at = NOW()
-                    WHERE room_id = $1
-                    AND is_active = true
-                    `,
-                    [existingRoom.rows[0].id],
-                );
-            });
-            
-            // Wipe cache layer synchronously
-            await this.redis.delRoomState(staleRoom.room_code);
-        }
-
+        // The case: 'the same owner submits two room-creation requests almost simultaneously.'
         try {
-            const room =  await this.pg.withTransaction(async (transactionClient) => {
+            // Check ownership
+            const room = await this.pg.withTransaction(async (transactionClient) => {
+                await transactionClient.query(
+                    `SELECT pg_advisory_xact_lock(hashtext($1))`,
+                    [`watch-room-owner:${p.ownerId}`],
+                );
+
+                const existingRoom = await transactionClient.query(`
+                    SELECT id, room_code
+                    FROM public.rooms
+                    WHERE owner_id = $1 AND is_active = true
+                    LIMIT 1`,
+                    [p.ownerId]
+                );
+
+                if (existingRoom.rows.length > 0) {
+                    throw new ConflictException(
+                        `[watch-party service] You already own an active room (${existingRoom.rows[0].room_code}). 
+                        Close it before creating another room.`
+                    );
+                }
+
+                // Clear stale owner memberships only when their old room is inactive.
+
+                // This repairs the partial unique membership index after interrupted cleanup.
+                // COALESCE() returns the first non-null value in all the parameterized values 
+                // in COALESCE(value1, value2, ..., valueN), only return null when there is no 
+                // meaning value found
+                await transactionClient.query(`
+                    UPDATE public.room_participants AS rp
+                    SET is_active = false,
+                        left_at = COALESCE(rp.left_at, NOW())
+                    FROM public.rooms AS r
+                    WHERE rp.room_id = r.id
+                        AND rp.user_id = $1
+                        AND rp.is_active = true
+                        AND r.is_active = false`,
+                [p.ownerId]);
+
+                // Check for membership
+                const activeMembership = await transactionClient.query(`
+                    SELECT r.room_code
+                    FROM public.room_participants rp
+                    INNER JOIN public.rooms r ON r.id = rp.room_id
+                    WHERE rp.user_id = $1
+                        AND r.is_active =  true
+                        AND rp.is_active = true
+                    LIMIT 1`, 
+                [p.ownerId]);
+
+                if (activeMembership.rows.length > 0) {
+                    throw new ConflictException(
+                        `[watch-party service] You are already participating in 
+                        active room ${activeMembership.rows[0].room_code}. Leave that room 
+                        before creating another one.`
+                    );
+                }
+
+                // After verifying and cleaning up this user stale memberships 
+                // (owner-ship and participant-ship)
+                // Now this time is for create the room
                 const insertRoomQuery = `
                     INSERT INTO public.rooms (
                         room_code,
@@ -116,63 +179,107 @@ export class WatchPartyService {
                     )
                     VALUES ($1, $2, $3, $4, $5, true)
                     RETURNING
-                        id,
-                        room_code,
-                        owner_id,
-                        movie_id,
-                        max_participants
-                `;
+                        id, room_code, owner_id, movie_id, max_participants`;
+                
+                const result = await transactionClient.query<any>(insertRoomQuery, [
+                    cleanRoomCode,
+                    p.dto.passwordPlain,
+                    p. ownerId,
+                    p.dto.movieId,
+                    p.dto.maxParticipants || 5,
+                ]);
 
-                const roomResult = await transactionClient.query<any>(
-                    insertRoomQuery, 
-                    [
-                        p.dto.roomCode,
-                        p.dto.passwordPlain,   
-                        p.ownerId,
-                        p.dto.movieId,
-                        p.dto.maxParticipants || 5
-                    ]
-                );
-
-                const createdRoom  = roomResult.rows[0];
+                const createdRoom = result.rows[0];
 
                 const createOwnerParticipantQuery = `
                     INSERT INTO public.room_participants (
                         room_id,
-                        user_id,
+                        user_id, 
                         has_control_privilege
                     )
-                    VALUES ($1, $2, true)
-                `;
-
-                await transactionClient.query(
-                    createOwnerParticipantQuery,
-                    [
-                        createdRoom.id,
-                        p.ownerId,
-                    ],
-                );
+                    VALUES ($1, $2, true)`;
+                
+                await transactionClient.query(createOwnerParticipantQuery, [
+                    createdRoom.id, p.ownerId
+                ]);
 
                 return createdRoom;
-
             });
 
-            /*
-             * PostgreSQL transaction has successfully committed here.
+            /**
+             * PostgreSQL transaction has successfully committed here
              * Redis is now initialized as the runtime projection.
              */
-            await this.redis.setRoomState(room.room_code, {
-                roomId: room.id,
-                roomCode: room.room_code,
-                ownerId: room.owner_id,
-                movieId: room.movie_id,
-                maxParticipants: room.max_participants,
-                participantCount: 1,
-                status: 'PAUSED',
-                playhead: 0,
-                lastUpdated: Date.now()
-            });
-            
+            try {
+                await this.redisRetryHelper.retry<void>(
+                    async () => {
+                        await this.redis.setRoomState(room.room_code, {
+                            roomId: room.id,
+                            roomCode: room.room_code,
+                            ownerId: room.owner_id,
+                            movieId: room.movie_id,
+                            maxParticipants: room.max_participants,
+                            participantCount: 1,
+                            status: 'PAUSED',
+                            playhead: 0,
+                            lastUpdated: Date.now(),
+                        });
+                    },
+                    3, 
+                    200,
+                )
+            } catch (redisError) {
+                // PostgreSQL and Redis cannot share a transaction. Compensate the 
+                // committed DB write so a failed create does not leave an active room.
+                try {
+                    await this.redisRetryHelper.retry(
+                        async () => {
+                            await this.redis.delRoomState(room.room_code);
+                        }
+                    );
+                } catch (cacheCleanupError) {
+                    this.logger.error({
+                        message: 'Failed to remove partial Redis state after room creation failed',
+                        roomCode: room.room_code,
+                        error: (cacheCleanupError as Error).message,
+                    });
+                }
+
+
+                // Room Creation and Membership Record Compensation
+                // Inactive the DB write of the failed create
+                try {
+                    await this.pg.withTransaction(async (transactionClient) => {
+                        await transactionClient.query(`
+                            UPDATE public.room_participants
+                            SET is_active = false, left_at = NOW()
+                            WHERE room_id = $1
+                            AND is_active = true`,
+                            [
+                                room.id
+                            ]
+                        );
+
+                        await transactionClient.query(
+                            `UPDATE public.rooms
+                            SET is_active = false
+                            WHERE id = $1`,
+                            [
+                                room.id
+                            ]
+                        );
+                    });
+                } catch (compensationError) {
+                    this.logger.error({
+                        message: 'Failed to compensate room creation after Redis initialization failed',
+                        roomId: room.id,
+                        error: (compensationError as Error).message,
+                    });
+                }
+
+                throw redisError;
+            }
+
             this.logger.log({
                 message: 'Room session metadata committed to PostgreSQL and initialized in Redis',
                 roomId: room.id,
@@ -199,7 +306,40 @@ export class WatchPartyService {
     }
 
     /**
+     * Associates a user as an active participant in a watch room session, enforcing 
+     * room credentials, capacity limits, and mutual exclusivity across active rooms.
      * 
+     * ### Workflow & Mechanism
+     * 1. **Row-Level Locking**: Queries and locks the target room row (`FOR UPDATE`) using 
+     *    the normalized room code to prevent concurrent joins from observing stale capacity.
+     * 2. **Security Verification**: Validates the room's password (unless the user is the room owner).
+     * 3. **Single-Room Enforcement**: Verifies that the user is not actively participating in 
+     *    any other active room (`r.is_active = true` and `rp.is_active = true`).
+     * 4. **Membership Handling**:
+     *    - **Reuse**: If the user already has an active participant record in this room, it reuses it.
+     *    - **Insertion**: If no active membership exists, checks the current active participant 
+     *      count against `max_participants`. If capacity allows, creates a new participant record.
+     * 5. **Redis Synchronization & Compensation (Saga Pattern)**:
+     *    - Updates Redis with the new participant count using an exponential backoff retry.
+     *    - If Redis updates fail after the database transaction commits, a compensation step 
+     *      runs to deactivate the newly created participant record, keeping data consistent.
+     * 
+     * ### Usage Example
+     * ```ts
+     * const association = await this.watchPartyService.associateParticipant({
+     *     dto: { roomCode: 'ROOM123', passwordPlain: 'secret' },
+     *     userId: 'user-uuid-456'
+     * });
+     * ```
+     * 
+     * @param p An object containing the join details and user identifier.
+     * @param p.dto Data Transfer Object containing the room code and password.
+     * @param p.userId The unique UUID of the user attempting to join the room.
+     * @returns A promise resolving with participant metadata, including `participantId`, `createdMembership`, and updated `participantCount`.
+     * @throws {NotFoundException} Throws if no matching active room is found.
+     * @throws {BadRequestException} Throws if credentials are invalid or the room has reached maximum capacity.
+     * @throws {ConflictException} Throws if the user is already participating in another active room.
+     * @throws {Error} Throws if database operations fail or if Redis synchronization and its subsequent compensation fail.
      */
     async associateParticipant(p: {dto: JoinRoomDto, userId: string}) {
         const cleanCode = p.dto.roomCode.trim().toUpperCase();
@@ -317,6 +457,7 @@ export class WatchPartyService {
                     }
 
                     let participant;
+                    let createdMembership = false;
 
                     if (existingParticipant) {
                         /*
@@ -379,6 +520,7 @@ export class WatchPartyService {
                         );
 
                         participant = participantResult.rows[0];
+                        createdMembership = true;
 
                         this.logger.log({
                             message: 'New room participant record created',
@@ -407,6 +549,7 @@ export class WatchPartyService {
 
                     return {
                         participantId: participant.id,
+                        createdMembership,
                         roomId: room.id,
                         roomCode: room.room_code,
                         passwordPlain: room.password,
@@ -422,12 +565,50 @@ export class WatchPartyService {
              * PostgreSQL membership transaction has committed.
              * Now update Redis's ephemeral room projection.
              */
-            await this.redis.updateRoomState(
-                result.roomCode,
-                {
-                    participantCount: result.participantCount,
-                },
-            );
+            try {
+                await this.redisRetryHelper.retry(
+                    async () => {
+                        await this.redis.updateRoomState(
+                            result.roomCode,
+                            {
+                                participantCount: result.participantCount,
+                            },
+                        );
+                    }
+                );
+            } catch (redisError) {
+                this.logger.error({
+                    message: 'Failed to update Redis after participant association',
+                    participantId: result.participantId,
+                    roomId: result.roomId,
+                    createdMembership: result.createdMembership,
+                    error: (redisError as Error).message,
+                });
+
+                if (result.createdMembership) {
+                    try {
+                        await this.pg.withTransaction(async (transactionClient) => {
+                            await transactionClient.query(`
+                                UPDATE public.room_participants
+                                SET is_active = false,
+                                    left_at = NOW()
+                                WHERE id = $1 AND is_active = true`,
+                            [
+                                result.participantId
+                            ]);
+                        });
+                    } catch (compensationError) {
+                        this.logger.error({
+                            message: 'Failed to compensate new membership after Redis update failure',
+                            participantId: result.participantId,
+                            roomId: result.roomId,
+                            error: (compensationError as Error).message,
+                        });
+                    }
+                }
+
+                throw redisError;
+            }
 
             return result;
         } catch (error) {
@@ -515,11 +696,15 @@ export class WatchPartyService {
                 );
             }
 
-            await this.redis.updateRoomState(
-                result.roomCode,
-                {
-                    participantCount: result.participantCount,
-                },
+            await this.redisRetryHelper.retry(
+                async () => {
+                    await this.redis.updateRoomState(
+                        result.roomCode,
+                        {
+                            participantCount: result.participantCount,
+                        },
+                    );
+                }
             );
 
             this.logger.log({
@@ -541,7 +726,32 @@ export class WatchPartyService {
         }
     }
 
-    async leaveRoomSession(userId: string): Promise<{ 
+    /**
+     * Disassociates a user from a watch room session by deactivating their participant 
+     * record, recalculating the active occupancy count, and synchronizing the state with Redis.
+     * 
+     * ### Workflow & Mechanism
+     * 1. **Active Membership Lookup & Row Locking**: Queries the active participant record 
+     *    and joins the rooms table, locking the target participant row (`FOR UPDATE OF rp`) 
+     *    to serialize concurrent leave or cleanup operations.
+     * 2. **State Deactivation**: Updates the participant's record by setting `is_active = false` 
+     *    and recording the departure timestamp (`left_at = NOW()`), preserving historical data.
+     * 3. **Occupancy Recalculation**: Counts the remaining active participants in the room 
+     *    within the same transaction boundary to ensure a consistent count.
+     * 4. **Redis Projection Update**: Synchronizes the updated lower participant count 
+     *    to Redis. If no active membership is found, logs a warning and throws a `NotFoundException`.
+     * 
+     * ### Usage Example
+     * ```ts
+     * const roomState = await this.watchPartyService.disassociateParticipant('participant-uuid-789');
+     * ```
+     * 
+     * @param participantId The unique UUID of the room participant record to deactivate.
+     * @returns A promise resolving with the updated room metadata (`roomId`, `roomCode`, and new `participantCount`).
+     * @throws {NotFoundException} Throws if no active membership record is found for the given participant ID.
+     * @throws {Error} Throws if database operations or Redis synchronization fail.
+     */
+    async leaveRoomSession(userId: string, roomId?: string): Promise<{ 
         status: string;
         roomCode?: string;
         roomId?: string;
@@ -567,12 +777,41 @@ export class WatchPartyService {
                         OR rp.user_id = $1
                     )
                     AND r.is_active = true
+                    AND ($2::uuid IS NULL OR r.id = $2::uuid)
                     FOR UPDATE OF r
                     `,
-                    [userId],
+                    [userId, roomId ?? null],
                 );
 
                 if (userSessionResult.rows.length === 0) {
+                    // An earlier cleanup attempt may have deactivated the room
+                    // in PostgreSQL but failed while deleting its Redis projection.
+                    // Return the exact inactive owner room so a retry can finish cleanup
+                    if (roomId) {
+                        const inactiveRoomResult = await transactionClient.query<any>(`
+                            SELECT id AS room_id, room_code, owner_id, is_active
+                            FROM public.rooms
+                            WHERE id = $1
+                            LIMIT 1`,
+                        [
+                            roomId
+                        ]);
+
+                        const inactiveRoom = inactiveRoomResult.rows[0];
+
+                        if (inactiveRoom && 
+                            inactiveRoom.owner_id === userId &&
+                            inactiveRoom.is_active === false
+                        ) {
+                            return {
+                                status: 'ROOM_ALREADY_INACTIVE',
+                                roomCode: inactiveRoom.room_code,
+                                roomId: inactiveRoom.room_id,
+                                participantCount: 0,
+                            }
+                        }
+                    }
+
                     return {
                         status: 'NO_ACTIVE_SESSION',
                     };
@@ -681,24 +920,59 @@ export class WatchPartyService {
             return result;
         }
 
-        if (result.status === 'ROOM_DESTROYED') {
-            await this.redis.delRoomState(
-                result.roomCode!,
+        if (result.status === 'ROOM_DESTROYED' ||
+            result.status === 'ROOM_ALREADY_INACTIVE'
+        ) {
+            await this.redisRetryHelper.retry(
+                async () => {
+                    await this.redis.delRoomState(
+                        result.roomCode!,
+                    );
+                }
             );
 
             return result;
         }
 
-        await this.redis.updateRoomState(
-            result.roomCode!,
-            {
-                participantCount: result.participantCount!,
-            },
+        await this.redisRetryHelper.retry(
+            async () => {
+                await this.redis.updateRoomState(
+                    result.roomCode!,
+                    {
+                        participantCount: result.participantCount!,
+                    },
+                );
+            }
         );
 
         return result;
     }
 
+    /**
+     * Fetches active room details from PostgreSQL by its room code, with automatic 
+     * sanitization, normalization, and handling for missing or inactive rooms.
+     * 
+     * ### Workflow & Mechanism
+     * 1. **Sanitization & Normalization**: Trims whitespace and converts the input `roomCode` 
+     *    to uppercase to ensure consistent matching against database records.
+     * 2. **Database Lookup**: Queries the `public.rooms` table for an active record (`is_active = true`) 
+     *    matching the normalized code, mapping columns to camelCase aliases (`roomId`, `roomCode`, etc.).
+     * 3. **Result Handling**: 
+     *    - If no matching active room is found, logs a warning and returns `null`.
+     *    - If found, returns the mapped room details object from the first row.
+     * 
+     * ### Usage Example
+     * ```ts
+     * const room = await this.watchPartyService.getRoomDetailsByCode('ROOM123');
+     * if (!room) {
+     *     // Handle room not found
+     * }
+     * ```
+     * 
+     * @param roomCode The unique string code of the watch room to look up.
+     * @returns A promise resolving with the room details object, or `null` if the room is not found or inactive.
+     * @throws {Error} Throws if the database query execution fails unexpectedly.
+     */
     async getRoomDetailsByCode(roomCode: string) {
         const query = `
             SELECT 

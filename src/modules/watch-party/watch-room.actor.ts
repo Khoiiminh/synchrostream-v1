@@ -38,7 +38,6 @@ export class WatchRoomActor {
         return {
             roomId: this.roomId,
             roomCode: this.roomCode,
-            passwordPlain: this.passwordPlain,
             ownerId: this.ownerId,
             movieId:this.movieId,
             mediaSessionId: this.mediaSessionId,
