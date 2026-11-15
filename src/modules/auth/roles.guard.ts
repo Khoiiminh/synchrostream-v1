@@ -17,7 +17,7 @@ export class RolesGuard implements CanActivate {
      * details about the current request, response, and the specific controller/handler being invoked.
      */
     canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
-        this.logger.log(`Checking role permission to access the route...`);
+        this.logger.verbose({ message: 'Checking route role requirements' });
 
         /**
          *      `Reflector`: is a core utility helper provided by NestJS. It is injected here because
@@ -29,7 +29,7 @@ export class RolesGuard implements CanActivate {
         ]);
 
         if (!requiredRoles) {
-            this.logger.log(`No role permission required for this route.`);
+            this.logger.verbose({ message: 'Route has no role requirement' });
             return true;
         }
 
@@ -49,22 +49,22 @@ export class RolesGuard implements CanActivate {
          */
         const { user } = context.switchToHttp().getRequest();
         if (!user) {
-            this.logger.warn(`Access attempted without an authenticated user context.`);
+            this.logger.warn({ message: 'Access denied: no authenticated user' });
             throw new ForbiddenException(`Access Denied: Missing Authentication Context`);
         }
 
         if (!user.role) {
-            this.logger.warn(`User ${user.id || 'unknown'} has no role assigned.`);
+            this.logger.warn({ message: 'Access denied: user has no role', userId: user.id });
             throw new ForbiddenException(`Access Denied: User role is missing`);
         }
 
         const hasRole = requiredRoles.includes(user.role);
         if (!hasRole) {
-            this.logger.warn(`User's role does not match the required ones: user-${user.role || 'unknown'} >< required-${requiredRoles.join(', ')}`);
+            this.logger.warn({ message: 'Access denied: role not permitted', userId: user.id, role: user.role, requiredRoles });
             throw new ForbiddenException(`Access Denied: Requires role [${requiredRoles.join(', ')}]`);
         }
 
-        this.logger.log(`Request granted to go through`);
+        this.logger.verbose({ message: 'Access granted', userId: user.id, role: user.role });
         return true;
     }
 }

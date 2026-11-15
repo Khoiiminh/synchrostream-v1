@@ -1,11 +1,12 @@
 import { Pool, PoolClient, QueryResult } from 'pg';
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
+    private readonly logger = new Logger(PostgresProvider.name);
     private pool!: Pool;
 
     constructor(private configService: ConfigService) {}
@@ -27,7 +28,7 @@ export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
                 : undefined
         });
 
-        console.log('PostgreSQL Connection Pool initialized');
+        this.logger.log({ message: 'PostgreSQL pool initialized' });
     }
 
     /**
@@ -44,23 +45,40 @@ export class PostgresProvider implements OnModuleInit, OnModuleDestroy {
      */
     async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
         const client = await this.pool.connect();
+        let transactionStarted = false;
+        // A client whose ROLLBACK failed is in an unknown state; destroy it
+        // instead of returning it to the pool.
+        let releaseError: Error | undefined;
         try {
-
             await client.query('BEGIN');
+            transactionStarted = true;
             const result = await callback(client);
             await client.query('COMMIT');
+            transactionStarted = false;
             return result;
-            
         } catch (error) {
-            await client.query('ROLLBACK');
+            if (transactionStarted) {
+                try {
+                    await client.query('ROLLBACK');
+                } catch (rollbackError) {
+                    releaseError = rollbackError instanceof Error
+                        ? rollbackError
+                        : new Error(String(rollbackError));
+                    this.logger.error({
+                        message: 'PostgreSQL transaction rollback failed; preserving the original error',
+                        err: error,
+                        rollbackError,
+                    });
+                }
+            }
             throw error;
         } finally {
-            client.release();
+            client.release(releaseError);
         }
     }
 
     async onModuleDestroy() {
         await this.pool.end();
-        console.log('PostgreSQL Pool closed');
+        this.logger.log({ message: 'PostgreSQL pool closed' });
     }
 }

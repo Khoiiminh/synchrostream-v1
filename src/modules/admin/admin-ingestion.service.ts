@@ -24,7 +24,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
     ) {}
 
     onModuleInit() {
-        this.logger.log(`Initializing active session garbage collection routine...`);
+        this.logger.log({ message: 'Starting stale ingestion session sweeper' });
 
         this.cleanupInterval = setInterval(() => {
             this.evictExpiredSessions();
@@ -32,7 +32,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
     }
 
     async onModuleDestroy() {
-        this.logger.warn(`Application environment termination detected. Evacuating all stateful ingestion actors...`);
+        this.logger.log({ message: 'Shutting down; aborting active ingestion sessions', count: this.activeSessions.size });
         if (this.cleanupInterval) {
             clearInterval(this.cleanupInterval);
         }
@@ -45,7 +45,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
 
     private async safelyAbortR2Session({movieId, session, reason}:{movieId: string, session: IngestionSession, reason: string}): Promise<void> {
         try {
-            this.logger.warn(`Aborting orphaned multipart allocation on R2 storage for Movie ID: ${movieId}. Reason: ${reason}`);
+            this.logger.warn({ message: 'Aborting orphaned multipart upload on R2', movieId, reason });
             await this.r2.abortMultiPartUpload({
                 key: session.objectKey,
                 uploadId: session.uploadId
@@ -58,21 +58,21 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
             `;
             await this.pg.query(rollbackQuery, [movieId]);
         } catch (error) {
-            this.logger.error(`Failed to securely clean asset vectors for Movie ID ${movieId}: ${(error as Error).message}`);
+            this.logger.error({ message: 'Failed to clean up aborted upload assets', movieId, err: error });
         }
     }
 
     private async evictExpiredSessions(): Promise<void> {
         const now = Date.now();
-        this.logger.log(`Scanning active video ingestion registries for stale session metrics...`);
+        this.logger.debug({ message: 'Scanning ingestion sessions for stale uploads' });
 
         for (const [movieId, session] of this.activeSessions.entries()) {
             if (now - session.createdAt > this.SESSION_TTL_MS) {
-                this.logger.warn(`Ingestion session timed out for Movie ID: ${movieId}. Aborting R2 state.`);
+                this.logger.warn({ message: 'Ingestion session timed out; aborting upload', movieId });
             
                 // 1. Fire and forget R2 abort commands
                 this.r2.abortMultiPartUpload({ key: session.objectKey, uploadId: session.uploadId })
-                    .catch(err => this.logger.error(`R2 Abort error for ${movieId}:`, err));
+                    .catch(err => this.logger.error({ message: 'Failed to abort timed-out upload on R2', movieId, err }));
 
                 // 2. Mark the DB entry accurate as FAILED
                 this.markIngestionAsFailed(movieId);
@@ -91,9 +91,9 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
         `;
         try {
             await this.pg.query(queryStr, [movieId]);
-            this.logger.warn(`Database lifecycle updated to FAILED for crashed asset entry: ${movieId}`);
+            this.logger.warn({ message: 'Marked movie as FAILED after aborted ingestion', movieId });
         } catch (dbErr) {
-            this.logger.error(`Failed to flip recovery status for ${movieId}:`, dbErr);
+            this.logger.error({ message: 'Failed to mark movie as FAILED after aborted ingestion', movieId, err: dbErr });
         }
     }
 
@@ -105,7 +105,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
         const objectKey = `raw-mezzanines/${movieId}.mp4`;
 
         try {
-            this.logger.log(`Opening multipart handshake protocol on R2 storage layer for object: ${objectKey}`);
+            this.logger.log({ message: 'Starting multipart upload on R2', objectKey });
             const uploadId = await this.r2.startMultiPartUpload(objectKey);
 
             const metadata = JSON.stringify({
@@ -128,22 +128,22 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
 
             return { movieId, uploadId, objectKey };
         } catch (error) {
-            this.logger.error(`Critical transaction collapse during initialization of payload sequence: ${(error as Error).message}`);
+            this.logger.error({ message: 'Failed to initialize multipart upload', err: error });
             throw new BadRequestException(`Initialization vector failure: ${(error as Error).message}`);
         }
     }
 
     async processChunkIngestion(params: { movieId: string; uploadId: string; partNumber: number; fileBuffer: Buffer }): Promise<{etag: string}> {
-        this.logger.log(`Processing chunk ingestion. Movie ID: ${params.movieId}, Upload ID: ${params.uploadId}, Part Number: ${params.partNumber}, Size: ${params.fileBuffer.length} bytes`);
+        this.logger.debug({ message: 'Uploading chunk', movieId: params.movieId, uploadId: params.uploadId, partNumber: params.partNumber, bytes: params.fileBuffer.length });
 
         const session = this.activeSessions.get(params.movieId);
 
         if (!session) {
-            this.logger.warn(`Ingestion pipeline session not found or expired for Movie ID: ${params.movieId}`);
+            this.logger.warn({ message: 'Chunk rejected: ingestion session not found or expired', movieId: params.movieId });
             throw new NotFoundException(`Ingestion pipeline session has expired`);
         }
         if(session.uploadId !== params.uploadId) {
-            this.logger.warn(`Ingestion session mismatch for Movie ID: ${params.movieId}. Expected Upload ID: ${session.uploadId}, Received: ${params.uploadId}`);
+            this.logger.warn({ message: 'Chunk rejected: upload id mismatch', movieId: params.movieId, expectedUploadId: session.uploadId, uploadId: params.uploadId });
             throw new NotFoundException(`Ingestion session is mismatch`);
         }
 
@@ -155,11 +155,11 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 body: params.fileBuffer
             });
 
-            this.logger.log(`Successfully uploaded part ${params.partNumber} for Movie ID: ${params.movieId}. ETag: ${etag}`);
+            this.logger.debug({ message: 'Chunk uploaded', movieId: params.movieId, partNumber: params.partNumber, etag });
 
             return { etag };
         } catch (error) {
-            this.logger.error(`Chunk ingestion transport layer failed at part sequence ${params.partNumber}: ${(error as Error).message}`);
+            this.logger.error({ message: 'Chunk upload failed', movieId: params.movieId, partNumber: params.partNumber, err: error });
             throw new BadRequestException(`Chunk ingestion failure on part ${params.partNumber}: ${(error as Error).message}`);
         }
     }
@@ -169,16 +169,16 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
         uploadId: string, 
         parts: Array<{PartNumber: number, ETag: string}>
     }): Promise<{ message: string, objectKey: string, movieId: string}> {
-        this.logger.log(`Finalizing movie upload. Movie ID: ${movieId}, Upload ID: ${uploadId}, Total Parts: ${parts.length}`);
+        this.logger.log({ message: 'Finalizing multipart upload', movieId, uploadId, partCount: parts.length });
 
         const session = this.activeSessions.get(movieId);
  
         if (!session) {
-            this.logger.warn(`Ingestion pipeline session not found or expired during finalization. Movie ID: ${movieId}`);
+            this.logger.warn({ message: 'Finalize rejected: ingestion session not found or expired', movieId });
             throw new NotFoundException(`Ingestion pipeline session has expired`);
         }
         if(session.uploadId !== uploadId) {
-            this.logger.warn(`Ingestion session mismatch during finalization. Movie ID: ${movieId}. Expected: ${session.uploadId}, Received: ${uploadId}`);
+            this.logger.warn({ message: 'Finalize rejected: upload id mismatch', movieId, expectedUploadId: session.uploadId, uploadId });
             throw new NotFoundException(`Ingestion session is mismatch`);
         }
         
@@ -191,13 +191,13 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 parts: structuralParts
             });
 
-            this.logger.log(`Multipart upload finalized successfully on R2. Movie ID: ${movieId}, Object Key: ${session.objectKey}\n`);
-            this.logger.log(`Starting the transcoding engine for: ${movieId}`);
+            this.logger.log({ message: 'Multipart upload completed on R2', movieId, objectKey: session.objectKey });
+            this.logger.log({ message: 'Triggering transcode after upload', movieId });
 
             setTimeout(() => {
                 this.transcoding.initiateBackgroundTranscode(movieId)
                 .catch((err) => {
-                    this.logger.error(`Automated post-ingestion transcode trigger failed for movie ${movieId}: ${err.message}`);
+                    this.logger.error({ message: 'Post-upload transcode trigger failed', movieId, err });
                 });
             }, 2500);
 
@@ -207,10 +207,10 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 movieId: movieId
             }
         } catch (error) {
-            this.logger.error(`Multipart closure operation failed for Movie ID: ${movieId}. Error: ${(error as Error).message}`);
+            this.logger.error({ message: 'Failed to complete multipart upload', movieId, err: error });
             throw new BadRequestException(`Multipart closure operation failed: ${(error as Error).message}`);
         } finally {
-            this.logger.debug(`Cleaning up ingestion session from active sessions map for Movie ID: ${movieId}`);
+            this.logger.debug({ message: 'Removed ingestion session', movieId });
             this.activeSessions.delete(movieId);
         }
     }

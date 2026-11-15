@@ -34,11 +34,19 @@ export class LiveKitController {
         description:
             "The watch room already has an active MediaSession or the MediaSession cannot be started.",
     })
+    @ApiResponse({
+        status: 403,
+        description:
+            "The caller is not an active member of the active watch room.",
+    })
     async createMediaSession(
         @Body() dto: CreateMediaSessionDto,
+        @Request() request: any,
     ) {
-        return this.liveKitService.createMediaSession(
+        // Idempotent: returns the room's existing ACTIVE session when present.
+        return this.liveKitService.getOrCreateMediaSessionForMember(
             dto.roomId,
+            request.user.id,
         );
     }
 

@@ -24,6 +24,10 @@ export class WatchRoomActor {
         lastUpdated: Date.now() 
     };
 
+    // Media readiness is independent of watch-room admission: the actor may exist
+    // before LiveKit is available, and the session may be replaced after recovery.
+    private currentMediaSessionId: string | null;
+
     constructor(
         public readonly roomId: string,
         public readonly roomCode: string,
@@ -31,8 +35,18 @@ export class WatchRoomActor {
         public readonly ownerId: string,
         public readonly movieId: string,
         public readonly maxParticipants: number,
-        public readonly mediaSessionId: string,
-    ) {}
+        mediaSessionId: string | null,
+    ) {
+        this.currentMediaSessionId = mediaSessionId;
+    }
+
+    public get mediaSessionId(): string | null {
+        return this.currentMediaSessionId;
+    }
+
+    public setMediaSessionId(mediaSessionId: string): void {
+        this.currentMediaSessionId = mediaSessionId;
+    }
 
     public getSnapshot() {
         return {
@@ -40,7 +54,7 @@ export class WatchRoomActor {
             roomCode: this.roomCode,
             ownerId: this.ownerId,
             movieId:this.movieId,
-            mediaSessionId: this.mediaSessionId,
+            mediaSessionId: this.currentMediaSessionId,
             playback: { 
                 ...this.playbackState 
             },

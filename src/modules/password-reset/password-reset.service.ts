@@ -1,3 +1,4 @@
+import { maskEmail } from "../../common/logging/logger.js";
 import { Injectable, NotFoundException, BadRequestException, OnModuleInit, Logger, InternalServerErrorException } from "@nestjs/common";
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -64,7 +65,7 @@ export class PasswordService implements OnModuleInit {
     }
 
     async requestReset(dto: RequestResetDto) {
-        this.logger.log(`Password reset request for email: ${dto.email}`);
+        this.logger.log({ message: 'Password reset requested', email: maskEmail(dto.email) });
 
         const user = await this.pg.query<any>(
             'SELECT id FROM users WHERE email = $1',
@@ -73,7 +74,7 @@ export class PasswordService implements OnModuleInit {
 
         if (!user || user.rows.length < 1) {
             // Log as warn, but won't throw to prevent email enumeration attacks
-            this.logger.warn(`Reset requested for non-existent email: ${dto.email}`);
+            this.logger.warn({ message: 'Password reset requested for unknown email', email: maskEmail(dto.email) });
             return {
                 message: 'If an account exists, a reset link has been sent.'
             }
@@ -86,7 +87,7 @@ export class PasswordService implements OnModuleInit {
 
         this.tokenTTL = ttl;
 
-        this.logger.debug(`Generate reset token for user ID: ${user.rows[0].id}`);
+        this.logger.debug({ message: 'Generated password reset token', userId: user.rows[0].id });
 
         await this.pg.query(
             'UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3',
@@ -98,10 +99,10 @@ export class PasswordService implements OnModuleInit {
 
             await this.sendResetEmail(payload);
 
-            this.logger.log(`Reset email successfully dispatched to: ${dto.email}`);
+            this.logger.log({ message: 'Password reset email sent', email: maskEmail(dto.email) });
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error(`SMTP/OAuth2 Error: ${errorMessage}`);
+            this.logger.error({ message: 'Failed to send password reset email', error: errorMessage });
             throw new InternalServerErrorException('Error sending email');
         }
 
@@ -134,7 +135,7 @@ export class PasswordService implements OnModuleInit {
     }
 
     async resetPassword(dto: ResetPasswordDto) {
-        this.logger.log(`Attempting password reset with token: ${dto.token.substring(0, 10)}...`);
+        this.logger.debug({ message: 'Password reset attempt' });
 
         const user = await this.pg.query<any>(
             'SELECT id FROM users WHERE reset_token = $1',
@@ -142,7 +143,7 @@ export class PasswordService implements OnModuleInit {
         );
 
         if (!user || user.rows.length < 1) {
-            this.logger.error(`Reset failed: Token is invalid or has expired`);
+            this.logger.warn({ message: 'Password reset rejected: token invalid or expired' });
             throw new BadRequestException('Invalid or expired token')
         };
 
@@ -151,7 +152,7 @@ export class PasswordService implements OnModuleInit {
         await this.pg.withTransaction(async (client) => {
             await client.query('UPDATE users SET password_hash = $1 where id = $2', [newHash, user.rows[0].id]);
             await client.query('UPDATE users SET reset_token = NULL, reset_expires = NULL where id = $1', [user.rows[0].id]);
-            this.logger.log(`Password updated and tokens cleared for user: ${user.rows[0].id}`);
+            this.logger.log({ message: 'Password updated', userId: user.rows[0].id });
         });
 
         return { 

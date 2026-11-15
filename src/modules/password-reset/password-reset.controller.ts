@@ -1,3 +1,4 @@
+import { maskEmail } from "../../common/logging/logger.js";
 import { Controller, Post, Body, HttpStatus, HttpCode, Logger } from "@nestjs/common";
 import { PasswordService } from "./password-reset.service.js";
 import { RequestResetDto, ResetPasswordDto } from "./password-reset.dto.js";
@@ -45,7 +46,7 @@ export class PasswordController {
         }
     })
     async requestReset(@Body() dto: RequestResetDto) {
-        this.logger.log(`POST /request received for ${dto.email}`);
+        this.logger.debug({ message: 'Password reset requested', email: maskEmail(dto.email) });
         return this.passwordService.requestReset(dto);
     }
 
@@ -80,12 +81,12 @@ export class PasswordController {
         }
     })
     async resetPassword(@Body() dto: ResetPasswordDto) {
-        this.logger.log(`Confirming password reset for token ending in ...${dto.token.slice(-5)}`);
+        this.logger.debug({ message: 'Password reset confirmation received' });
         const result = await this.passwordService.resetPassword(dto);
 
         if (result.userId) {
             await this.redis['client'].del(`user:${result.userId}:session`);
-            this.logger.log(`Active session invalidated for user: ${result.userId} due to password reset`);
+            this.logger.log({ message: 'Sessions invalidated after password reset', userId: result.userId });
         }
 
         return { message: result.message };

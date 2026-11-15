@@ -1,5 +1,5 @@
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import { ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { MediaSessionService } from "../media-session-sfu/media-session.service.js";
 import { LIVEKIT_CONFIG, type LiveKitConfig } from "@/shared/infrastructure/livekit/livekit.types.js";
 import { LiveKitConnectionDto } from "./dto/livekit-connection.dto.js";
@@ -102,6 +102,7 @@ export class LiveKitService {
             }
 
             if (session.status === "ACTIVE") {
+                await this.assertRoomActive(roomId);
                 return session;
             }
 
@@ -193,6 +194,117 @@ export class LiveKitService {
     }
 
     /**
+     * Creates or returns the room's media session on behalf of an authenticated
+     * caller, who must be an active member of the ACTIVE room.
+     */
+    async getOrCreateMediaSessionForMember(roomId: string, userId: string): Promise<MediaSession> {
+        const membership = await this.pg.query(
+            `SELECT rp.id
+             FROM public.room_participants rp
+             INNER JOIN public.rooms r ON r.id = rp.room_id
+             WHERE rp.room_id = $1 AND rp.user_id = $2
+               AND rp.is_active = true AND r.lifecycle_status = 'ACTIVE'
+             LIMIT 1`,
+            [roomId, userId],
+        );
+        if (!membership.rows[0]) {
+            throw new ForbiddenException("Only active members of an active room can start its media session.");
+        }
+        return this.getOrCreateMediaSession(roomId);
+    }
+
+    /**
+     * Removes provider participants that no longer hold an active membership.
+     * Identities are membership ids (`room_participants.id`), so a departed
+     * member's old identity is always absent from the allowed set.
+     * `loadAllowedIdentities` is called AFTER listing provider participants: a
+     * listed participant connected with a token that required a committed
+     * membership, so reading memberships later can never miss them.
+     * Absolute reconciliation: safe to repeat after any crash or retry.
+     */
+    async reconcileRoomParticipants(
+        roomId: string,
+        loadAllowedIdentities: () => Promise<ReadonlySet<string>>,
+    ): Promise<void> {
+        let session: MediaSession;
+        try {
+            session = await this.mediaSessionService.getMediaSessionByRoomId(roomId);
+        } catch (error) {
+            if (error instanceof NotFoundException) return;
+            throw error;
+        }
+        if (session.status !== "ACTIVE") return;
+
+        let participants;
+        try {
+            participants = await this.liveKitInfrasService.listParticipants(session.id);
+        } catch (error) {
+            if (this.isProviderNotFound(error)) return;
+            throw error;
+        }
+
+        if (participants.length === 0) return;
+        const allowedIdentities = await loadAllowedIdentities();
+
+        for (const participant of participants) {
+            if (allowedIdentities.has(participant.identity)) continue;
+            try {
+                await this.liveKitInfrasService.removeParticipant(session.id, participant.identity);
+                this.logger.log({
+                    message: "Removed LiveKit participant without an active room membership",
+                    mediaSessionId: session.id,
+                    roomId,
+                    participantIdentity: participant.identity,
+                });
+            } catch (error) {
+                if (!this.isProviderNotFound(error)) throw error;
+            }
+        }
+    }
+
+    /** Reconciles a durable startup event after a process restart. */
+    async reconcileMediaSession(mediaSessionId: string, recoveryStartedAt: Date | string): Promise<void> {
+        let session: MediaSession;
+        try {
+            session = await this.mediaSessionService.getMediaSession(mediaSessionId);
+        } catch (error) {
+            // The row was removed (e.g. cascade delete); nothing left to converge.
+            if (error instanceof NotFoundException) return;
+            throw error;
+        }
+        if (session.status === "ACTIVE") return;
+        if (session.status === "CREATED") {
+            // A CREATED session for a room that is no longer ACTIVE can never start.
+            const room = await this.pg.query(
+                `SELECT 1 FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE'`,
+                [session.roomId],
+            );
+            if (!room.rows[0]) {
+                await this.endMediaSessionById(mediaSessionId);
+            }
+            return;
+        }
+        if (session.status === "ENDED") {
+            // Startup may have completed provider creation after a concurrent
+            // termination already marked this exact session ENDED.
+            await this.deleteLiveKitRoomIfPresent(mediaSessionId);
+            return;
+        }
+        if (session.status === "ENDING") {
+            await this.endMediaSessionById(mediaSessionId);
+            return;
+        }
+        if (session.status === "STARTING") {
+            const ageMs = Date.now() - new Date(recoveryStartedAt).getTime();
+            if (ageMs < this.staleStartingSessionMs) {
+                throw new ConflictException("LiveKit startup is still within its recovery window.");
+            }
+            // A crashed/ambiguous startup is converged by deleting this exact provider generation.
+            await this.endMediaSessionById(mediaSessionId);
+        }
+    }
+
+    /**
      * Ends one exact media-session generation. Retries never look up a newer
      * session by room ID, so an old cleanup cannot terminate a replacement.
      */
@@ -225,7 +337,7 @@ export class LiveKitService {
 
         if (session.status !== "ENDING") {
             try {
-                session = await this.mediaSessionService.endMediaSession(mediaSessionId);
+                session = await this.markLiveKitSessionEnding(mediaSessionId);
             } catch (transitionError) {
                 // Another lifecycle operation may have changed this same
                 // session after our read. Re-read and retry the guarded transition.
@@ -245,7 +357,7 @@ export class LiveKitService {
                 ) {
                     shouldDeleteProviderRoom = latestSession.status !== "CREATED";
                     try {
-                        session = await this.mediaSessionService.endMediaSession(mediaSessionId);
+                        session = await this.markLiveKitSessionEnding(mediaSessionId);
                     } catch (retryTransitionError) {
                         const finalSession = await this.mediaSessionService.getMediaSession(mediaSessionId);
                         if (finalSession.status === "ENDED") {
@@ -280,7 +392,7 @@ export class LiveKitService {
                 this.logger.warn({
                     message: "LiveKit room deletion during cleanup failed; session remains ENDING for retry",
                     mediaSessionId: session.id,
-                    error: (error as Error).message,
+                    err: error,
                 });
                 throw error;
             }
@@ -331,8 +443,11 @@ export class LiveKitService {
                 rp.user_id,
                 rp.room_id
             FROM public.room_participants rp
+            INNER JOIN public.rooms r ON r.id = rp.room_id
             WHERE rp.room_id = $1
             AND rp.user_id = $2
+            AND rp.is_active = true
+            AND r.lifecycle_status = 'ACTIVE'
             LIMIT 1
         `;
 
@@ -359,6 +474,11 @@ export class LiveKitService {
         const participantToken = await this.liveKitTokenService.createParticipantToken({
             roomName: session.id,
             participantIdentity: participantId,
+            // Short-lived: the token is only needed to (re)join. Connected
+            // clients receive refreshed tokens from LiveKit, while a member whose
+            // membership ended cannot reuse an old token for long. Removal from
+            // the provider room is enforced by ROOM_RECONCILE.
+            ttl: "10m",
             canPublish: true,
             canSubscribe: true,
             canPublishData: true,
@@ -384,25 +504,29 @@ export class LiveKitService {
         try {
             await this.liveKitInfrasService.deleteRoom(roomName);
         } catch (error) {
-            const providerError = error as {
-                statusCode?: number;
-                status?: number;
-                code?: number | string;
-                message?: string;
-            };
-            const isNotFound =
-                providerError.statusCode === 404 ||
-                providerError.status === 404 ||
-                providerError.code === 404 ||
-                providerError.code === "NOT_FOUND" ||
-                /room.*(not found|does not exist)/i.test(providerError.message ?? "");
-
-            if (isNotFound) {
+            if (this.isProviderNotFound(error)) {
                 return;
             }
 
             throw error;
         }
+    }
+
+    private isProviderNotFound(error: unknown): boolean {
+        const providerError = error as {
+            statusCode?: number;
+            status?: number;
+            code?: number | string;
+            message?: string;
+        };
+        return (
+            providerError?.statusCode === 404 ||
+            providerError?.status === 404 ||
+            providerError?.code === 404 ||
+            providerError?.code === "NOT_FOUND" ||
+            providerError?.code === "not_found" ||
+            /(room|participant).*(not found|does not exist)/i.test(providerError?.message ?? "")
+        );
     }
 
     /**
@@ -433,7 +557,7 @@ export class LiveKitService {
                 max_participants
             FROM public.rooms
             WHERE id = $1
-            AND is_active = true
+            AND lifecycle_status = 'ACTIVE'
             LIMIT 1
         `;
 
@@ -448,7 +572,7 @@ export class LiveKitService {
             );
         }
 
-        const startingSession = await this.mediaSessionService.startMediaSession(mediaSessionId);
+        const startingSession = await this.startLiveKitSession(mediaSessionId, room.rows[0].id);
 
         try {
             await this.liveKitInfrasService.createRoom(
@@ -456,10 +580,135 @@ export class LiveKitService {
                 room.rows[0].max_participants,
             );
 
-            return await this.mediaSessionService.activateMediaSession(mediaSessionId);
+            return await this.activateLiveKitSession(mediaSessionId, startingSession.roomId);
 
         } catch (error) {
+            // The room may have begun termination while provider creation was in flight.
+            // Cleanup addresses this exact media-session generation, never a replacement.
+            try {
+                await this.endMediaSessionById(mediaSessionId);
+            } catch (cleanupError) {
+                this.logger.warn({
+                    message: "Failed to clean up LiveKit room after startup did not activate",
+                    mediaSessionId,
+                    err: cleanupError,
+                });
+            }
+            // The termination worker may have deleted the provider room before an
+            // in-flight createRoom call completed. Delete once more after creation
+            // has settled, even if the database session is already ENDED.
+            try {
+                await this.deleteLiveKitRoomIfPresent(mediaSessionId);
+            } catch (providerCleanupError) {
+                this.logger.warn({
+                    message: "LiveKit provider room may require outbox retry after startup failure",
+                    mediaSessionId,
+                    err: providerCleanupError,
+                });
+            }
             throw error;
         }
+    }
+
+    private async assertRoomActive(roomId: string): Promise<void> {
+        const result = await this.pg.query(
+            `SELECT id FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE' LIMIT 1`,
+            [roomId],
+        );
+        if (!result.rows[0]) {
+            throw new ConflictException("The watch room is no longer accepting media connections.");
+        }
+    }
+
+    private async startLiveKitSession(mediaSessionId: string, roomId: string): Promise<MediaSession> {
+        const result = await this.pg.withTransaction(async (client) => {
+            const room = await client.query(
+                `SELECT id FROM public.rooms
+                 WHERE id = $1 AND lifecycle_status = 'ACTIVE'
+                 FOR UPDATE`,
+                [roomId],
+            );
+            if (!room.rows[0]) {
+                throw new ConflictException("Cannot start LiveKit for a room that is no longer ACTIVE.");
+            }
+            const updated = await client.query(
+                `UPDATE public.media_sessions SET status = 'STARTING'
+                 WHERE id = $1 AND room_id = $2 AND status = 'CREATED'
+                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
+                [mediaSessionId, roomId],
+            );
+            if (!updated.rows[0]) {
+                throw new ConflictException("MediaSession state changed before LiveKit startup.");
+            }
+            // Recovery for a crashed startup is only needed after the 30 s startup
+            // window; claiming it earlier just fails and burns retry attempts.
+            await client.query(
+                `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id, next_attempt_at)
+                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1, NOW() + INTERVAL '35 seconds')`,
+                [mediaSessionId],
+            );
+            return updated.rows[0];
+        });
+        return this.mapMediaSession(result);
+    }
+
+    private async activateLiveKitSession(mediaSessionId: string, roomId: string): Promise<MediaSession> {
+        const result = await this.pg.withTransaction(async (client) => {
+            const room = await client.query(
+                `SELECT id FROM public.rooms
+                 WHERE id = $1 AND lifecycle_status = 'ACTIVE'
+                 FOR UPDATE`,
+                [roomId],
+            );
+            if (!room.rows[0]) {
+                throw new ConflictException("The watch room began termination before LiveKit activation.");
+            }
+            const updated = await client.query(
+                `UPDATE public.media_sessions
+                 SET status = 'ACTIVE', started_at = COALESCE(started_at, NOW())
+                 WHERE id = $1 AND room_id = $2 AND status = 'STARTING'
+                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
+                [mediaSessionId, roomId],
+            );
+            if (!updated.rows[0]) {
+                throw new ConflictException("MediaSession cannot activate from its current state.");
+            }
+            return updated.rows[0];
+        });
+        return this.mapMediaSession(result);
+    }
+
+    private async markLiveKitSessionEnding(mediaSessionId: string): Promise<MediaSession> {
+        const result = await this.pg.withTransaction(async (client) => {
+            const updated = await client.query(
+                `UPDATE public.media_sessions
+                 SET status = 'ENDING'
+                 WHERE id = $1 AND status IN ('CREATED', 'STARTING', 'ACTIVE')
+                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
+                [mediaSessionId],
+            );
+            if (!updated.rows[0]) {
+                throw new ConflictException("MediaSession state changed before LiveKit termination.");
+            }
+            await client.query(
+                `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
+                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1)`,
+                [mediaSessionId],
+            );
+            return updated.rows[0];
+        });
+        return this.mapMediaSession(result);
+    }
+
+    private mapMediaSession(row: any): MediaSession {
+        return {
+            id: row.id,
+            roomId: row.room_id,
+            status: row.status,
+            assignedSfuNodeId: row.assigned_sfu_node_id ?? null,
+            createdAt: row.created_at,
+            startedAt: row.started_at ?? null,
+            endedAt: row.ended_at ?? null,
+        };
     }
 }

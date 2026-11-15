@@ -96,7 +96,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async getProfile(@Request() req: ExpressRequest & { user: { id: string; username: string; role: string } }) {
     // req.user is automatically attached by passport-jwt strategy validate()
-    this.logger.log(`User ${req.user.id} (${req.user.role}) is fetching their profile`);
+    this.logger.debug({ message: 'Fetching profile', userId: req.user.id, role: req.user.role });
     
     const dbUser = await this.authService.findUserProfileById(req.user.id);
     
@@ -148,7 +148,7 @@ export class AuthController {
     const token = authHeader?.split(' ')[1];
 
     if (!token) {
-      this.logger.warn('Logout attempt without token in header');
+      this.logger.warn({ message: 'Logout rejected: missing bearer token' });
       return {
         message: 'No active session'
       };

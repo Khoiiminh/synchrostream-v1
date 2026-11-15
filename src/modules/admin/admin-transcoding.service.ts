@@ -22,10 +22,10 @@ export class AdminTranscodingService implements OnModuleInit {
 
     onModuleInit() {
         try {
-            this.logger.log(`Registering local binary target layer path for FFmpeg execution: ${ffmpegInstaller.path}`);
+            this.logger.log({ message: 'Using bundled FFmpeg binary', path: ffmpegInstaller.path });
             ffmpeg.setFfmpegPath(ffmpegInstaller.path);
         } catch (error) {
-            this.logger.error(`Failed to assign runtime binary mapping path: ${(error as Error).message}`);
+            this.logger.error({ message: 'Failed to configure FFmpeg binary path', err: error });
         }
     }
 
@@ -33,14 +33,14 @@ export class AdminTranscodingService implements OnModuleInit {
         return new Promise((resolve, reject) => {
             command
                 .on('start', (cmdStr) => {
-                    this.logger.debug(`Spawned native child process runner sequence command: ${cmdStr}`);
+                    this.logger.debug({ message: 'FFmpeg started', command: cmdStr });
                 })
                 .on('end', () => {
                     resolve();
                 })
                 .on('error', (err, stdout, stderr) => {
-                    this.logger.error(`FFmpeg execution failed: ${err.message}`);
-                    this.logger.debug(`FFmpeg stderr: ${stderr}`)
+                    this.logger.error({ message: 'FFmpeg failed', err });
+                    this.logger.debug({ message: 'FFmpeg stderr', stderr })
                     reject(err);
                 })
                 .run();
@@ -48,20 +48,20 @@ export class AdminTranscodingService implements OnModuleInit {
     }
 
     async initiateBackgroundTranscode(movieId: string): Promise<void> {
-        this.logger.log(`Received background transcode request for Movie ID: ${movieId}`);
+        this.logger.log({ message: 'Transcode requested', movieId });
         // 1. Move DB verification where it belongs
         const checkMovieQuery = `SELECT id, status FROM movies WHERE id = $1`;
         const movies = await this.pg.query<{ id: string, status: string}>(checkMovieQuery, [movieId]);
 
         if (!movies || movies.rows.length === 0) {
-            this.logger.warn(`Transcode aborted: Movie ID ${movieId} not found in database`);
+            this.logger.warn({ message: 'Transcode rejected: movie not found', movieId });
             throw new NotFoundException("Requested movie profile not found in database.");
         }
 
         const targetMovie = movies.rows[0];
         const mezzanineKey = `raw-mezzanines/${targetMovie.id}.mp4`;
 
-        this.logger.log(`Movie ${movieId} verified. Handing off to execution pipeline...`);
+        this.logger.debug({ message: 'Movie verified; starting transcode pipeline', movieId });
 
         const updateProcessing = `UPDATE movies SET status = 'PROCESSING'::processing_status WHERE id = $1;`;
         await this.pg.query(updateProcessing, [movieId]);
@@ -72,7 +72,7 @@ export class AdminTranscodingService implements OnModuleInit {
         // 2. Offload execution asynchronously to fire-and-forget the HTTP worker loop
         this.executeTranscodePipeline({ movieId: targetMovie.id, mezzanineKey })
             .catch((err) => {
-                this.logger.error(`Unhandled pipeline trigger fault for movie ${movieId}: ${err.message}`);
+                this.logger.error({ message: 'Transcode pipeline failed unexpectedly', movieId, err });
             });
     }
 
@@ -81,7 +81,7 @@ export class AdminTranscodingService implements OnModuleInit {
      * synchronous adaptive bitrates and streams them out to Cloudflare R2 bucket destination.
      */
     async executeTranscodePipeline({ movieId, mezzanineKey }: {movieId: string, mezzanineKey: string}): Promise<void> {
-        this.logger.log(`Initializing media processing engine for Movie ID: ${movieId}`);
+        this.logger.log({ message: 'Transcode started', movieId });
 
         const baseTempDir = this.configService.get<string>('TRANSCODE_TEMP_DIR') || 'D:/synchrostream_temp';
 
@@ -99,7 +99,7 @@ export class AdminTranscodingService implements OnModuleInit {
             if (!fs.existsSync(outDir804p)) fs.mkdirSync(outDir804p, { recursive: true });
 
             // 2. Stream the input file from R2 straight onto local temp storage disk
-            this.logger.log(`Downloading mezzanine source track to worker disk memory...`);
+            this.logger.debug({ message: 'Downloading source file', movieId });
             const masterStream = await this.r2.getObjectStream(mezzanineKey);
 
             // Verify headers or handle empty stream bounds early
@@ -145,7 +145,7 @@ export class AdminTranscodingService implements OnModuleInit {
                     if (bytesReceived === 0) {
                         return safeReject(new Error(`Zero bytes written to disk. Cloud file is not fully propagated yet.`));
                     }
-                    this.logger.log(`Mezzanine file handle successfully flushed and closed on disk for movie: ${movieId}`);
+                    this.logger.debug({ message: 'Source file downloaded', movieId });
                     safeResolve();
                 });
 
@@ -163,7 +163,7 @@ export class AdminTranscodingService implements OnModuleInit {
                 throw new Error(`Media Engine Panic: Target file size resolved to 0 bytes. Stream truncated.`);
             }
 
-            this.logger.debug(`File integration verified successfully (${(stats.size / (1024 * 1024)).toFixed(2)} MB). Launching FFmpeg multi-variant ladder...`);
+            this.logger.debug({ message: 'Source file verified; starting FFmpeg ladder', movieId, sizeMb: Number((stats.size / (1024 * 1024)).toFixed(2)) });
             
             // 3. Kickoff full multi-variant HLS multi-bitrate compilation directly via local paths
             // This bypasses the single output stream limitation entirely
@@ -214,9 +214,9 @@ export class AdminTranscodingService implements OnModuleInit {
                     `-hls_segment_filename ${path.join(outDir804p, 'chunk_%03d.m4s')}`
                 ]);
 
-            this.logger.log(`Spawning multi-variant local transcoding context for Movie ID: ${movieId}`);
+            this.logger.debug({ message: 'Encoding variants', movieId });
             await this.runFfmpegAsPromise(ffmpegCommand);
-            this.logger.log(`Encoding processing completed for Movie ID: ${movieId}. Packaging HLS structure uploads...`);
+            this.logger.log({ message: 'Encoding completed; uploading HLS output', movieId });
 
             // 4. Generate the master manifest topology structure textually
             const masterManifestContent = 
@@ -248,7 +248,7 @@ export class AdminTranscodingService implements OnModuleInit {
             }
 
             const allGeneratedFiles = getFileRecursively(tmpDir);
-            this.logger.log(`Discovered ${allGeneratedFiles.length} streaming artifacts to upload to R2...`);
+            this.logger.debug({ message: 'Uploading HLS artifacts to R2', movieId, count: allGeneratedFiles.length });
 
             // 6. STREAM REPLICATED ARTIFACTS DIRECTLY TO R2 BUCKET TARGET CORES
             for (const localFilePath of allGeneratedFiles) {
@@ -299,7 +299,7 @@ export class AdminTranscodingService implements OnModuleInit {
                     uploadBody = fs.createReadStream(localFilePath);
                 }
 
-                this.logger.debug(`Streaming artifact directly onto R2 target location: ${destinationR2Key} (${contentType})`);
+                this.logger.debug({ message: 'Uploading HLS artifact', key: destinationR2Key, contentType });
                 
                 await this.r2.uploadStream({
                     key: destinationR2Key,
@@ -309,7 +309,7 @@ export class AdminTranscodingService implements OnModuleInit {
             }
 
             const finalManifestKey = `film/${movieId}/master.m3u8`;
-            this.logger.log(`Asset bundle uploaded to cloud cluster. Registering root manifest mapping at key: ${finalManifestKey}`);
+            this.logger.debug({ message: 'HLS upload complete; registering manifest', movieId, manifestKey: finalManifestKey });
 
             // 7. STATE BOUNDARY SYNCHRONIZATION VIA POSTGRES MUTATION
             const assetSyncQuery = `
@@ -323,7 +323,7 @@ export class AdminTranscodingService implements OnModuleInit {
 
             await this.pg.query(assetSyncQuery, [finalManifestKey, movieId]);
 
-            this.logger.log(`Movie ID: ${movieId} state is now officially registered as AVAILABLE.`);
+            this.logger.log({ message: 'Transcode completed; movie AVAILABLE', movieId });
 
             // Broadcast live data via WebSockets to alert the client UI dashboard context
             this.telemetryGateway.broadcastMovieStatusUpdate({ 
@@ -333,7 +333,7 @@ export class AdminTranscodingService implements OnModuleInit {
             });
                 
         } catch (error) {
-            this.logger.error(`Processing error failed on Movie ID: ${movieId} execution loop: ${(error as Error).message}`);
+            this.logger.error({ message: 'Transcode failed', movieId, err: error });
             try {
                 const failStatusQuery = `UPDATE movies SET status = 'FAILED'::processing_status WHERE id = $1;`;
                 await this.pg.query(failStatusQuery, [movieId]);
@@ -341,16 +341,16 @@ export class AdminTranscodingService implements OnModuleInit {
                 // FAILURE BROADCAST: Inform UI that transcoding hit a structural exception
                 this.telemetryGateway.broadcastMovieStatusUpdate({ movieId, status: 'FAILED' });
             } catch (dbError) {
-                this.logger.error(`Failed to flag transcoding failure for Movie ${movieId}: ${(dbError as Error).message}`);
+                this.logger.error({ message: 'Failed to mark movie as FAILED after transcode error', movieId, err: dbError });
             }
         } finally {
             try {
                 if (fs.existsSync(tmpDir)) {
                     fs.rmSync(tmpDir, { recursive: true, force: true });
-                    this.logger.debug(`Cleaned up ephemeral disk transcode workspace for: ${movieId}`);
+                    this.logger.debug({ message: 'Removed transcode workspace', movieId });
                 }
             } catch (cleanupError) {
-                this.logger.error(`Failed to clean up transcode directory ${tmpDir}: ${(cleanupError as Error).message}`);
+                this.logger.error({ message: 'Failed to remove transcode workspace', movieId, dir: tmpDir, err: cleanupError });
             }
         }
     }

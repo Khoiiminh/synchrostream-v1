@@ -21,17 +21,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     async validate(req: any, payload: any) {
-        this.logger.debug(`Validating JWT for user: ${payload.username} (ID: ${payload.sub})`);
+        this.logger.debug({ message: 'Validating JWT', userId: payload.sub });
 
         const token = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
 
         if (!token || await this.blacklist.has(token)) {
-            this.logger.warn(`Blacklisted token attempt by user: ${payload.username}`);
+            this.logger.warn({ message: 'Rejected blacklisted token', userId: payload.sub });
             throw new UnauthorizedException('This session has been revoked');
         }
         
         if (!payload.sub || !payload.role) {
-            this.logger.error(`JWT Payload is missing critical claims: ${JSON.stringify(payload)}`);
+            this.logger.warn({ message: 'Rejected JWT with missing claims', claims: Object.keys(payload ?? {}) });
             throw new UnauthorizedException('Malformed token payload');
         }
 

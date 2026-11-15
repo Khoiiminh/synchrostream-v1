@@ -16,7 +16,7 @@ export class MediaService {
      */
     async resolveSoloPlayback(movieId: string) {
         const startTime = Date.now();
-        this.logger.log({ message: 'Resolving streaming manifest access parameters', movieId });
+        this.logger.debug({ message: 'Resolving streaming manifest access parameters', movieId });
 
         const query = `
             SELECT id, title, hls_url, dash_url, status, is_cmaf_ready, metadata
@@ -28,7 +28,7 @@ export class MediaService {
             const result = await this.pg.query<any>(query, [movieId]);
             movie = result.rows[0];
         } catch (dbError) {
-            this.logger.error({ message: 'Database connection execution fault during media query', movieId, error: (dbError as Error).message }, (dbError as Error).stack);
+            this.logger.error({ message: 'Database connection execution fault during media query', movieId, err: dbError });
             throw dbError;
         }
 
@@ -60,13 +60,13 @@ export class MediaService {
                 }
             };
         } catch (storageError) {
-            this.logger.error({ message: 'Cloudflare R2 pre-signed URL generation failure', movieId, error: (storageError as Error).message }, (storageError as Error).stack);
+            this.logger.error({ message: 'Cloudflare R2 pre-signed URL generation failure', movieId, err: storageError });
             throw storageError;
         }
     }
 
     async getAvailableCatalog(): Promise<any[]> {
-        this.logger.log('Fetching active, fully-transcoded movie catalog for user discovery platform.');
+        this.logger.debug({ message: 'Fetching available movie catalog' });
 
         const queryText = `
             SELECT
@@ -98,7 +98,7 @@ export class MediaService {
                         parsedMetadata = movie.metadata;
                     }
                 } catch (e) {
-                    this.logger.error(`Failed parsing metadata block for movie ${movie.movieId}`, e);
+                    this.logger.error({ message: 'Failed to parse movie metadata', movieId: movie.movieId, err: e });
                 }
             }
 

@@ -16,7 +16,7 @@ export class RedisBlacklistProvider implements OnModuleInit, OnModuleDestroy {
         const password = this.configService.get<string>('REDIS_BLACKLIST_PASSWORD');
 
         if (!host || !port || !password) {
-            this.logger.error('Missing Redis Blacklist configuration in .env.development');
+            this.logger.error({ message: 'Missing Redis blacklist configuration' });
             throw new Error('REDIS_BLACKLIST_CONFIG_MISSING');
         }
 
@@ -41,18 +41,18 @@ export class RedisBlacklistProvider implements OnModuleInit, OnModuleDestroy {
         });
 
         this.client.on('connect', () => {
-            this.logger.log('Successfully connected to Redis Blacklist hosting')
+            this.logger.log({ message: 'Redis blacklist connected' })
         });
 
         this.client.on('error', (err) => {
-            this.logger.error('Redis Blacklist Client Error', err.message);
+            this.logger.error({ message: 'Redis blacklist client error', err });
         });
 
-        this.logger.log('Redis Blacklist Engine initialized on dedicated hosting');
+        this.logger.debug({ message: 'Redis blacklist client initialized' });
     }
 
     async add({ token, ttl }: {token: string, ttl: number}): Promise<void> {
-        this.logger.debug(`Blacklisting token for ${ttl} seconds`);
+        this.logger.debug({ message: 'Blacklisting token', ttlSeconds: ttl });
         await this.client.set(`blacklist:${token}`, '1', 'EX', ttl);
     }
 

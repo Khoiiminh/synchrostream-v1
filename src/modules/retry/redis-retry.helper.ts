@@ -58,20 +58,14 @@ export class RedisRetryHelper {
                 return await operation();
             } catch (error) {
                 if (attempt === maxAttempts) {
-                    this.logger.error(
-                        `Operation failed after ${maxAttempts} attempts`,
-                        error instanceof Error ? error.stack : undefined,
-                    );
+                    this.logger.error({ message: 'Operation failed after all retry attempts', maxAttempts, err: error });
 
                     throw error;
                 }
 
                 const delayMs = initialDelayMs * 2 ** (attempt - 1);
 
-                this.logger.warn(
-                    `Attempt ${attempt}/${maxAttempts} failed. ` +
-                    `Retrying in ${delayMs}ms.`,
-                );
+                this.logger.warn({ message: 'Operation failed; retrying', attempt, maxAttempts, delayMs, err: error });
 
                 await new Promise<void>((resolve) => {
                     setTimeout(resolve, delayMs);
