@@ -1,17 +1,28 @@
-import { Body, Controller, Inject, Param, Post, Request, UseGuards } from "@nestjs/common";
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
+import {
+    Body,
+    Controller,
+    Param,
+    Post,
+    Request,
+    UseGuards,
+} from "@nestjs/common";
+import {
+    ApiBearerAuth,
+    ApiOperation,
+    ApiResponse,
+    ApiTags,
+} from "@nestjs/swagger";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
 import { LiveKitService } from "./livekit.service.js";
 import { CreateMediaSessionDto } from "../media-session-sfu/dto/media-session.dto.js";
+import type { AuthenticatedRequest } from "../auth/auth.types.js";
 
 @ApiTags("LiveKit")
 @ApiBearerAuth("JWT-auth")
 @Controller("livekit")
 @UseGuards(JwtAuthGuard)
 export class LiveKitController {
-    constructor(
-        private readonly liveKitService: LiveKitService,
-    ) {}
+    constructor(private readonly liveKitService: LiveKitService) {}
 
     @Post("media-sessions/create")
     @ApiOperation({
@@ -21,13 +32,11 @@ export class LiveKitController {
     })
     @ApiResponse({
         status: 201,
-        description:
-            "MediaSession and LiveKit room created successfully.",
+        description: "MediaSession and LiveKit room created successfully.",
     })
     @ApiResponse({
         status: 404,
-        description:
-            "The requested watch room does not exist.",
+        description: "The requested watch room does not exist.",
     })
     @ApiResponse({
         status: 409,
@@ -41,7 +50,7 @@ export class LiveKitController {
     })
     async createMediaSession(
         @Body() dto: CreateMediaSessionDto,
-        @Request() request: any,
+        @Request() request: AuthenticatedRequest,
     ) {
         // Idempotent: returns the room's existing ACTIVE session when present.
         return this.liveKitService.getOrCreateMediaSessionForMember(
@@ -58,22 +67,19 @@ export class LiveKitController {
     })
     @ApiResponse({
         status: 201,
-        description:
-            "LiveKit connection credentials created successfully.",
+        description: "LiveKit connection credentials created successfully.",
     })
     @ApiResponse({
         status: 404,
-        description:
-            "MediaSession or room participant was not found.",
+        description: "MediaSession or room participant was not found.",
     })
     @ApiResponse({
         status: 409,
-        description:
-            "MediaSession is not active.",
+        description: "MediaSession is not active.",
     })
     async connectMediaSession(
         @Param("mediaSessionId") mediaSessionId: string,
-        @Request() request: any,
+        @Request() request: AuthenticatedRequest,
     ) {
         return this.liveKitService.createMediaSessionConnection(
             mediaSessionId,

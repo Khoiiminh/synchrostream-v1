@@ -1,14 +1,21 @@
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import { ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { MediaSession, MediaSessionStatus } from "./media-session.types.js";
+import {
+    ConflictException,
+    Injectable,
+    Logger,
+    NotFoundException,
+} from "@nestjs/common";
+import {
+    MediaSession,
+    MediaSessionRow,
+    mapMediaSessionRow,
+} from "./media-session.types.js";
 
 @Injectable()
 export class MediaSessionService {
     private readonly logger = new Logger(MediaSessionService.name);
 
-    constructor(
-        private readonly pg: PostgresProvider,
-    ) {}
+    constructor(private readonly pg: PostgresProvider) {}
 
     /**
      * Creates the control-plane representation of a media session.
@@ -29,19 +36,21 @@ export class MediaSessionService {
              id, is_active
             FROM public.rooms
             WHERE id = $1`;
-        
+
         const room = await this.pg.query<{
-            id: string,
-            is_active: boolean
+            id: string;
+            is_active: boolean;
         }>(query, [roomId]);
 
         if (!room || room.rows.length < 1) {
-            throw new NotFoundException('The requested watch room does not exist.',);
+            throw new NotFoundException(
+                "The requested watch room does not exist.",
+            );
         }
 
         if (!room.rows[0].is_active) {
             throw new ConflictException(
-                'Cannot create a media session for an inactive room.',
+                "Cannot create a media session for an inactive room.",
             );
         }
 
@@ -72,11 +81,14 @@ export class MediaSessionService {
             LIMIT 1
         `;
 
-        const existingRoom = await this.pg.query<any>(existingSessionQuery, [roomId]);
+        const existingRoom = await this.pg.query<MediaSessionRow>(
+            existingSessionQuery,
+            [roomId],
+        );
 
         if (existingRoom.rows[0]) {
             throw new ConflictException(
-                'The room already has an active media session.',
+                "The room already has an active media session.",
             );
         }
 
@@ -106,20 +118,22 @@ export class MediaSessionService {
                     created_at,
                     started_at,
                     ended_at
-            `; 
+            `;
 
-            const row = await this.pg.query(insertQuery, [roomId]);
+            const row = await this.pg.query<MediaSessionRow>(insertQuery, [
+                roomId,
+            ]);
 
             if (!row.rows[0]) {
                 throw new ConflictException(
-                    'Cannot create a media session for an inactive room.',
+                    "Cannot create a media session for an inactive room.",
                 );
             }
 
-            const session = this.mapRow(row.rows[0]);
+            const session = mapMediaSessionRow(row.rows[0]);
 
             this.logger.log({
-                message: 'MediaSession created successfully',
+                message: "MediaSession created successfully",
                 mediaSessionId: session.id,
                 roomId: session.roomId,
                 status: session.status,
@@ -134,7 +148,7 @@ export class MediaSessionService {
              * duplicate active sessions.
              */
             this.logger.error({
-                message: 'Failed to create MediaSession',
+                message: "Failed to create MediaSession",
                 roomId,
                 err: error,
             });
@@ -158,14 +172,18 @@ export class MediaSessionService {
                 ended_at
             FROM public.media_sessions
             WHERE id = $1`;
-        
-        const row = await this.pg.query<any>(query, [mediaSessionId]);
+
+        const row = await this.pg.query<MediaSessionRow>(query, [
+            mediaSessionId,
+        ]);
 
         if (!row || row.rows.length < 1) {
-            throw new NotFoundException('The requested media session does not exist.',);
+            throw new NotFoundException(
+                "The requested media session does not exist.",
+            );
         }
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     async getMediaSessionByRoomId(roomId: string): Promise<MediaSession> {
@@ -190,18 +208,15 @@ export class MediaSessionService {
             LIMIT 1
         `;
 
-        const row = await this.pg.query<any>(
-            query,
-            [roomId],
-        );
+        const row = await this.pg.query<MediaSessionRow>(query, [roomId]);
 
         if (!row || row.rows.length < 1) {
             throw new NotFoundException(
-                'The requested watch room does not have an active media session.',
+                "The requested watch room does not have an active media session.",
             );
         }
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     /**
@@ -213,11 +228,13 @@ export class MediaSessionService {
      * MediaOrchestration will later be responsible for selecting an SFU node
      * and asking that node to create the corresponding runtime.
      */
-    async startMediaSession(mediaSessionId: string):Promise<MediaSession> {
+    async startMediaSession(mediaSessionId: string): Promise<MediaSession> {
         const session = await this.getMediaSession(mediaSessionId);
 
-        if (session.status !== 'CREATED') {
-            throw new ConflictException(`MediaSession cannot start from status ${session.status}.`,);
+        if (session.status !== "CREATED") {
+            throw new ConflictException(
+                `MediaSession cannot start from status ${session.status}.`,
+            );
         }
 
         const query = `UPDATE public.media_sessions
@@ -233,19 +250,23 @@ export class MediaSessionService {
                 created_at,
                 started_at,
                 ended_at`;
-        
-        const row = await this.pg.query(query, [mediaSessionId]);
+
+        const row = await this.pg.query<MediaSessionRow>(query, [
+            mediaSessionId,
+        ]);
 
         if (!row || row.rows.length < 1) {
-            throw new ConflictException('MediaSession state changed before it could be started.',);
+            throw new ConflictException(
+                "MediaSession state changed before it could be started.",
+            );
         }
 
         this.logger.log({
-            message: 'MediaSession transitioned to STARTING',
+            message: "MediaSession transitioned to STARTING",
             mediaSessionId,
         });
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     /**
@@ -274,18 +295,22 @@ export class MediaSessionService {
                 ended_at
         `;
 
-        const row = await this.pg.query(query, [mediaSessionId]);
+        const row = await this.pg.query<MediaSessionRow>(query, [
+            mediaSessionId,
+        ]);
 
         if (!row || row.rows.length < 1) {
-            throw new ConflictException('MediaSession cannot transition to ACTIVE from its current state.',);
+            throw new ConflictException(
+                "MediaSession cannot transition to ACTIVE from its current state.",
+            );
         }
 
         this.logger.log({
-            message: 'MediaSession transitioned to ACTIVE',
+            message: "MediaSession transitioned to ACTIVE",
             mediaSessionId,
         });
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     /**
@@ -295,11 +320,13 @@ export class MediaSessionService {
         const session = await this.getMediaSession(mediaSessionId);
 
         if (
-            session.status !== 'CREATED' &&
-            session.status !== 'STARTING' &&
-            session.status !== 'ACTIVE'
+            session.status !== "CREATED" &&
+            session.status !== "STARTING" &&
+            session.status !== "ACTIVE"
         ) {
-            throw new ConflictException( `MediaSession cannot end from status ${session.status}.`,);
+            throw new ConflictException(
+                `MediaSession cannot end from status ${session.status}.`,
+            );
         }
 
         const query = `
@@ -322,18 +349,22 @@ export class MediaSessionService {
                 ended_at
         `;
 
-        const row = await this.pg.query(query, [mediaSessionId]);
+        const row = await this.pg.query<MediaSessionRow>(query, [
+            mediaSessionId,
+        ]);
 
         if (!row || row.rows.length < 1) {
-            throw new ConflictException('MediaSession state changed before it could be ended.',);
+            throw new ConflictException(
+                "MediaSession state changed before it could be ended.",
+            );
         }
 
         this.logger.log({
-            message: 'MediaSession transitioned to ENDING',
+            message: "MediaSession transitioned to ENDING",
             mediaSessionId,
         });
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     /**
@@ -360,23 +391,22 @@ export class MediaSessionService {
                 ended_at
         `;
 
-        const row = await this.pg.query<any>(
-            query,
-            [mediaSessionId],
-        );
+        const row = await this.pg.query<MediaSessionRow>(query, [
+            mediaSessionId,
+        ]);
 
         if (!row || row.rows.length < 1) {
             throw new ConflictException(
-                'MediaSession cannot transition to ENDED from its current state.',
+                "MediaSession cannot transition to ENDED from its current state.",
             );
         }
 
         this.logger.log({
-            message: 'MediaSession transitioned to ENDED',
+            message: "MediaSession transitioned to ENDED",
             mediaSessionId,
         });
 
-        return this.mapRow(row.rows[0]);
+        return mapMediaSessionRow(row.rows[0]);
     }
 
     /**
@@ -393,10 +423,7 @@ export class MediaSessionService {
     ): Promise<MediaSession> {
         const session = await this.getMediaSession(mediaSessionId);
 
-        if (
-            session.status !== 'CREATED' &&
-            session.status !== 'STARTING'
-        ) {
+        if (session.status !== "CREATED" && session.status !== "STARTING") {
             throw new ConflictException(
                 `Cannot assign an SFU node while MediaSession is ${session.status}.`,
             );
@@ -425,8 +452,8 @@ export class MediaSessionService {
         }
 
         if (
-            node.rows[0].status !== 'HEALTHY' &&
-            node.rows[0].status !== 'DEGRADED'
+            node.rows[0].status !== "HEALTHY" &&
+            node.rows[0].status !== "DEGRADED"
         ) {
             throw new ConflictException(
                 `SFU node ${sfuNodeId} is not available.`,
@@ -447,15 +474,7 @@ export class MediaSessionService {
                 ended_at
         `;
 
-        const updatedSession = await this.pg.query<{
-            id: string;
-            room_id: string;
-            status: MediaSessionStatus;
-            assigned_sfu_node_id: string | null;
-            created_at: Date;
-            started_at: Date | null;
-            ended_at: Date | null;
-        }>(
+        const updatedSession = await this.pg.query<MediaSessionRow>(
             updateQuery,
             [node.rows[0].id, mediaSessionId],
         );
@@ -467,23 +486,11 @@ export class MediaSessionService {
         }
 
         this.logger.log({
-            message: 'SFU node assigned to MediaSession',
+            message: "SFU node assigned to MediaSession",
             mediaSessionId,
             sfuNodeId,
         });
 
-        return this.mapRow(updatedSession.rows[0]);
+        return mapMediaSessionRow(updatedSession.rows[0]);
     }
-
-    private mapRow(row: any): MediaSession {
-        return {
-            id: row.id,
-            roomId: row.room_id,
-            status: row.status as MediaSessionStatus,
-            assignedSfuNodeId: row.assigned_sfu_node_id ?? null,
-            createdAt: row.created_at,
-            startedAt: row.started_at ?? null,
-            endedAt: row.ended_at ?? null,
-        };
-    }
-}   
+}

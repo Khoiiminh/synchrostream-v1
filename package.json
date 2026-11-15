@@ -18,7 +18,12 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "migrate:status": "node --env-file-if-exists=.env.development scripts/migrate.mjs status",
+    "migrate:create": "node scripts/migrate.mjs create",
+    "migrate:up": "node --env-file-if-exists=.env.development scripts/migrate.mjs up",
+    "migrate:down": "node --env-file-if-exists=.env.development scripts/migrate.mjs down",
+    "migrate:baseline": "node --env-file-if-exists=.env.development scripts/migrate.mjs baseline"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1058.0",
@@ -44,6 +49,7 @@
     "googleapis": "^171.4.0",
     "ioredis": "^5.10.1",
     "livekit-server-sdk": "^2.19.1",
+    "node-pg-migrate": "9.0.0",
     "nodemailer": "^10.0.12",
     "passport-jwt": "^4.0.1",
     "pg": "^8.20.0",

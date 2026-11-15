@@ -45,3 +45,5 @@ Thumbs.db
 
 # --- Database Credentials ---
 certs/
+# Synchronization measurement runs (thesis data)
+/metrics-data

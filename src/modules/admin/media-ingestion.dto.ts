@@ -40,5 +40,5 @@ export class CompleteUploadDto {
     uploadId!: string;
 
     @IsNotEmpty()
-    parts!: Array<{PartNumber: number, ETag: string}>
+    parts!: Array<{ PartNumber: number; ETag: string }>;
 }
