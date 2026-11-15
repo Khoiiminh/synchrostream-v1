@@ -21,7 +21,7 @@ export class WsJwtGuard implements CanActivate {
             const authHeader = client.handshake.headers.authorization || client.handshake.query.token;
 
             if (!authHeader) {
-                this.logger.error('WebSocket connection rejected: Missing authorization credentials.');
+                this.logger.warn({ message: 'WebSocket rejected: missing credentials' });
                 throw new WsException('Unauthorized connection signature.');
             }
 
@@ -51,7 +51,7 @@ export class WsJwtGuard implements CanActivate {
 
             return true;
         } catch (error) {
-            this.logger.error(`WebSocket guard authorization breakdown: ${(error as Error).message}`);
+            this.logger.warn({ message: 'WebSocket rejected: authentication failed', err: error });
             throw new WsException('Unauthorized handshake.');
         }
     }

@@ -6,6 +6,7 @@ import { WatchPartyGateway } from "./watch-party.gateway.js";
 import { WatchPartyController } from "./watch-party.controller.js";
 import { MediaSessionModule } from "../media-session-sfu/media-session.module.js";
 import { LiveKitApplicationModule } from "../livekit/livekit.module.js";
+import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 
 @Module({
     imports: [
@@ -24,6 +25,7 @@ import { LiveKitApplicationModule } from "../livekit/livekit.module.js";
     providers: [
         WatchPartyGateway, 
         WatchPartyService,
+        RoomLifecycleOutboxService,
     ],
 
     exports: [

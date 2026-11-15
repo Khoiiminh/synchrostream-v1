@@ -1,6 +1,6 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassThrough, Readable } from 'stream';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -10,6 +10,7 @@ import { Agent as HttpsAgent } from 'https';
 
 @Injectable()
 export class CloudflareR2Provider implements OnModuleInit {
+    private readonly logger = new Logger(CloudflareR2Provider.name);
     private s3!: S3Client;
     private bucketName!: string;
 
@@ -43,7 +44,7 @@ export class CloudflareR2Provider implements OnModuleInit {
         });
 
         this.bucketName = bucket;
-        console.log('Cloudflare R2 Storage Provider initialized');
+        this.logger.log({ message: 'Cloudflare R2 client initialized', bucket: this.bucketName });
     }
 
     async startMultiPartUpload(key: string): Promise<string> {

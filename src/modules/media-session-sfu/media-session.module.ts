@@ -1,6 +1,5 @@
 import { InfrastructureModule } from "@/shared/infrastructure/infrastructure.module.js";
 import { Module } from "@nestjs/common";
-import { MediaSessionController } from "./media-session.controller.js";
 import { MediaSessionService } from "./media-session.service.js";
 import { MediaOrchestrationService } from "./media-orchestration.service.js";
 
@@ -9,9 +8,12 @@ import { MediaOrchestrationService } from "./media-orchestration.service.js";
         InfrastructureModule,
     ],
 
-    controllers: [
-        MediaSessionController,
-    ],
+    // MediaSessionController (/v1/media-sessions/*) is intentionally NOT mounted.
+    // The self-built SFU is out of scope, and its endpoints let any authenticated
+    // user move any media session, LiveKit sessions included, between states,
+    // bypassing the room lock and the outbox. Re-mount it only behind
+    // membership/provider authorization when SFU work resumes.
+    controllers: [],
 
     providers: [
         MediaSessionService,

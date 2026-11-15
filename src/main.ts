@@ -1,14 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { TransformationInterceptor } from './common/interceptors/transformation.interceptor.js';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { GlobalExceptionFilter } from './common/interceptors/http-exception.filter.js';
 import cookieParser from 'cookie-parser';
 import { ConfigService } from '@nestjs/config';
+import { AppLogger } from './common/logging/logger.js';
+import { requestLoggingMiddleware } from './common/logging/request-logging.middleware.js';
 
 async function bootstrap() {
-    const app = await NestFactory.create(AppModule);
+    const app = await NestFactory.create(AppModule, { bufferLogs: true });
+    app.useLogger(new AppLogger());
 
     const configService = app.get(ConfigService);
 
@@ -28,6 +31,7 @@ async function bootstrap() {
         credentials: true,      // Allow cookies
     });
     
+    app.use(requestLoggingMiddleware);
     app.use(cookieParser())
     app.useGlobalInterceptors(new TransformationInterceptor());
     app.useGlobalFilters(new GlobalExceptionFilter());
@@ -67,5 +71,6 @@ async function bootstrap() {
     SwaggerModule.setup('v1/docs', app, document);
 
     await app.listen(port);
+    new Logger('Bootstrap').log({ message: 'HTTP server listening', port });
 }
 await bootstrap();

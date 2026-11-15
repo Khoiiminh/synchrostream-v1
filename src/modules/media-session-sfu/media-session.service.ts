@@ -17,7 +17,7 @@ export class MediaSessionService {
      * It only creates the authoritative MediaSession record in PostgreSQL.
      */
     async createMediaSession(roomId: string): Promise<MediaSession> {
-        this.logger.log({
+        this.logger.debug({
             message: "Creating MediaSession",
             roomId,
         });
@@ -81,12 +81,23 @@ export class MediaSessionService {
         }
 
         try {
+            /*
+             * Insert only while the room is ACTIVE, holding a share lock on the
+             * room row. Owner termination takes FOR UPDATE on the same row, so a
+             * session is either created before termination (and then ended by the
+             * termination worker) or not created at all. A plain is_active read
+             * followed by INSERT could leave a CREATED session on a TERMINATED room.
+             */
             const insertQuery = `
                 INSERT INTO public.media_sessions (
                     room_id,
                     status
                 )
-                VALUES ($1, 'CREATED')
+                SELECT r.id, 'CREATED'
+                FROM public.rooms r
+                WHERE r.id = $1
+                  AND r.lifecycle_status = 'ACTIVE'
+                FOR SHARE
                 RETURNING
                     id,
                     room_id,
@@ -98,6 +109,12 @@ export class MediaSessionService {
             `; 
 
             const row = await this.pg.query(insertQuery, [roomId]);
+
+            if (!row.rows[0]) {
+                throw new ConflictException(
+                    'Cannot create a media session for an inactive room.',
+                );
+            }
 
             const session = this.mapRow(row.rows[0]);
 
@@ -119,7 +136,7 @@ export class MediaSessionService {
             this.logger.error({
                 message: 'Failed to create MediaSession',
                 roomId,
-                error: (error as Error).message,
+                err: error,
             });
 
             throw error;
@@ -469,4 +486,4 @@ export class MediaSessionService {
             endedAt: row.ended_at ?? null,
         };
     }
-}
+}   

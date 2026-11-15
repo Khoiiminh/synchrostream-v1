@@ -32,6 +32,10 @@ export class LiveKitInfrastructureService {
         return await this.api.room.listParticipants(roomName);
     }
 
+    public async removeParticipant (roomName: string, participantIdentity: string): Promise<void> {
+        await this.api.room.removeParticipant(roomName, participantIdentity);
+    }
+
     public async getParticipant (roomName: string, participantIdentity: string): Promise<ParticipantInfo> {
         return await this.api.room.getParticipant(roomName, participantIdentity);
     } 

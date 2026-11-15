@@ -25,7 +25,7 @@ export class MediaController {
             description: 'Pre-signed adaptive manifest resolved successfully.' 
     })
     async getSoloStream(@Param('id', ParseUUIDPipe) movieId: string) {
-        this.logger.log({ message: 'Inbound GET HTTP solo playback request received', movieId });
+        this.logger.debug({ message: 'Inbound GET HTTP solo playback request received', movieId });
         return await this.mediaService.resolveSoloPlayback(movieId);
     }
 

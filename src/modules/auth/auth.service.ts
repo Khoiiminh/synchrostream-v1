@@ -1,3 +1,4 @@
+import { maskEmail } from "../../common/logging/logger.js";
 import {
   Injectable,
   UnauthorizedException,
@@ -24,7 +25,7 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    this.logger.log(`Attempting to register user: ${dto.email}`);
+    this.logger.debug({ message: 'Registration attempt', email: maskEmail(dto.email) });
 
     const existing = await this.pg.query(
       "SELECT id FROM users WHERE email = $1 OR username = $2",
@@ -32,7 +33,7 @@ export class AuthService {
     );
 
     if (existing.rows.length > 0) {
-      this.logger.warn(`Registration failed: Account already exists for ${dto.email}`);
+      this.logger.warn({ message: 'Registration rejected: account already exists', email: maskEmail(dto.email) });
       throw new ConflictException("Account already exists");
     }
 
@@ -43,12 +44,12 @@ export class AuthService {
       [dto.username, dto.email, passwordHash],
     );
 
-    this.logger.log(`User successfully created with ID: ${newUser.rows[0].id}`);
+    this.logger.log({ message: 'User registered', userId: newUser.rows[0].id });
     return { message: "Success: Account Created", userId: newUser.rows[0].id };
   }
 
   async login(dto: LoginDto) {
-    this.logger.log(`Login attempt for email: ${dto.email}`);
+    this.logger.debug({ message: 'Login attempt', email: maskEmail(dto.email) });
 
     const user = await this.pg.query<any>(
       "SELECT id, username, email, password_hash, role FROM users WHERE email = $1",
@@ -56,7 +57,7 @@ export class AuthService {
     );
 
     if (!user || !(await bcrypt.compare(dto.password, user.rows[0].password_hash))) {
-      this.logger.warn(`Failed login attempt for email: ${dto.email}`);
+      this.logger.warn({ message: 'Login failed: invalid credentials', email: maskEmail(dto.email) });
       throw new UnauthorizedException("Invalid Credentials");
     }
 
@@ -72,7 +73,7 @@ export class AuthService {
       86400,
     );
 
-    this.logger.log(`User ${user.rows[0].id} logged in successfully. Role: ${user.rows[0].role}`);
+    this.logger.log({ message: 'User logged in', userId: user.rows[0].id, role: user.rows[0].role });
     
     return { 
       user: {
@@ -86,11 +87,11 @@ export class AuthService {
   }
 
   async logout(token: string) {
-    this.logger.log('Logout request initiated')
+    this.logger.debug({ message: 'Logout requested' })
     const decoded = this.jwtService.decode(token) as { exp: number, sub: string };
 
     if (!decoded) {
-      this.logger.warn('Logout attempted with an unparsable or malformed token');
+      this.logger.warn({ message: 'Logout rejected: malformed token' });
       return {
         message: 'Logout processed'   // Avoid crashing if token is unparsable
       };
@@ -101,13 +102,13 @@ export class AuthService {
 
     if (ttl > 0) {
       await this.blacklist.add({ token, ttl });
-      this.logger.log(`Token blacklisted for user: ${decoded.sub}`);
+      this.logger.log({ message: 'User logged out; token blacklisted', userId: decoded.sub });
     }
 
     const userId = (decoded as any).sub;
     await this.redis['client'].del(`user:${userId}:session`);
 
-    this.logger.debug(`Session cleared for user: ${userId}`);
+    this.logger.debug({ message: 'Session cleared', userId });
     return {
       message: "Logged out and token revoked"
     }
@@ -127,7 +128,7 @@ export class AuthService {
     const user = await this.pg.query<any>(query, [userId]);
 
     if (!user || user.rows.length === 0) {
-      this.logger.error(`User not found`);
+      this.logger.warn({ message: 'Profile lookup failed: user not found', userId });
       throw new NotFoundException('The requested user session profile could not be located.');
     }
 

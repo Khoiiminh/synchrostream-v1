@@ -88,7 +88,7 @@ export class AdminController {
   })
   @HttpCode(HttpStatus.CREATED)
   async initiateUpload(@Body() dto: InitiateUploadDto, @Request() req: any) {
-    this.logger.log(`Admin ${req.user.id} is initiating multi-part upload for movie: ${dto.title}`,);
+    this.logger.log({ message: 'Admin started movie upload', userId: req.user.id, title: dto.title });
 
     const metadata = await this.ingestionService.initiateMovieUpload(dto);
     return {
@@ -155,10 +155,10 @@ export class AdminController {
     @UploadedFile() file: Express.Multer.File,
     @Request() req: any,
   ) {
-    this.logger.debug(`Admin ${req.user.id} uploading part ${partNumber} for Movie ${movieId}`);
+    this.logger.debug({ message: 'Admin uploading chunk', userId: req.user.id, movieId, partNumber });
 
     if (!file || !file.buffer) {
-        this.logger.error(`Upload failed: Missing binary payload for part ${partNumber}`);
+        this.logger.warn({ message: 'Chunk rejected: missing file payload', movieId, partNumber });
         throw new Error(
             "Multipart payload parsing exception: missing valid binary payload.",
         );
@@ -216,7 +216,7 @@ export class AdminController {
     }
   })
   async completeUpload(@Body() dto: CompleteUploadDto) {
-    this.logger.log(`Finalizing multipart upload sequence for Movie ID: ${dto.movieId}`);
+    this.logger.log({ message: 'Admin finalizing movie upload', movieId: dto.movieId });
 
     const confirmation = await this.ingestionService.finalizeMovieUpload({
       movieId: dto.movieId,
