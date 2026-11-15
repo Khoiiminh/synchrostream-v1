@@ -1,6 +1,11 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Redis } from 'ioredis';
+import {
+    Injectable,
+    Logger,
+    OnModuleInit,
+    OnModuleDestroy,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Redis } from "ioredis";
 
 @Injectable()
 export class RedisProvider implements OnModuleInit, OnModuleDestroy {
@@ -8,15 +13,13 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
     private client!: Redis;
     private publisher!: Redis;
 
-    constructor(private readonly configService: ConfigService) {
-
-    }
+    constructor(private readonly configService: ConfigService) {}
 
     onModuleInit() {
-        const connectionString = this.configService.get<string>('REDIS_URL');
+        const connectionString = this.configService.get<string>("REDIS_URL");
 
         if (!connectionString) {
-            throw new Error('REDIS_URL is not defined in .env.development');
+            throw new Error("REDIS_URL is not defined in .env.development");
         }
 
         const commonOptions = {
@@ -26,7 +29,7 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
                 return delay;
             },
             reconnectOnError: (err: Error) => {
-                const targetError = 'READONLY';
+                const targetError = "READONLY";
 
                 if (err.message.slice(0, targetError.length) === targetError) {
                     return true; // Reconnect on target error
@@ -38,7 +41,7 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         this.client = new Redis(connectionString, commonOptions);
         this.publisher = new Redis(connectionString, commonOptions);
 
-        this.logger.log({ message: 'Redis clients initialized' });
+        this.logger.log({ message: "Redis clients initialized" });
     }
 
     /**
@@ -53,7 +56,10 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         const roomId = String(state.roomId);
         const version = String(state.lifecycleVersion);
         const lifecycleStatus = String(state.lifecycleStatus);
-        const fields = Object.entries(state).flatMap(([field, value]) => [field, String(value)]);
+        const fields = Object.entries(state).flatMap(([field, value]) => [
+            field,
+            String(value),
+        ]);
 
         const script = `
             local existingId = redis.call('HGET', KEYS[1], 'roomId')
@@ -100,7 +106,9 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
             normalizedState[field] = String(value);
         }
 
-        const fields = Object.entries(normalizedState).flatMap(([field, value]) => [field, value]);
+        const fields = Object.entries(normalizedState).flatMap(
+            ([field, value]) => [field, value],
+        );
         const script = `
             if redis.call('HGET', KEYS[1], 'roomId') ~= ARGV[1] then return 0 end
             if redis.call('HGET', KEYS[1], 'lifecycleStatus') ~= 'ACTIVE' then return 0 end
@@ -108,7 +116,13 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
             redis.call('EXPIRE', KEYS[1], 86400)
             return 1
         `;
-        const applied = await this.client.eval(script, 1, key, expectedRoomId, ...fields);
+        const applied = await this.client.eval(
+            script,
+            1,
+            key,
+            expectedRoomId,
+            ...fields,
+        );
         return applied === 1;
     }
 
@@ -124,7 +138,10 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         state: Record<string, string | number>,
     ): Promise<boolean> {
         const key = `room:${roomCode}:state`;
-        const fields = Object.entries(state).flatMap(([field, value]) => [field, String(value)]);
+        const fields = Object.entries(state).flatMap(([field, value]) => [
+            field,
+            String(value),
+        ]);
         const script = `
             if redis.call('HGET', KEYS[1], 'roomId') ~= ARGV[1] then return 0 end
             redis.call('DEL', KEYS[1])
@@ -132,7 +149,10 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
             redis.call('EXPIRE', KEYS[1], 86400)
             return 1
         `;
-        return (await this.client.eval(script, 1, key, staleRoomId, ...fields)) === 1;
+        return (
+            (await this.client.eval(script, 1, key, staleRoomId, ...fields)) ===
+            1
+        );
     }
 
     private presenceKey(roomId: string, userId: string): string {
@@ -147,7 +167,12 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         if (members.length === 0) return;
         const pipeline = this.client.pipeline();
         for (const member of members) {
-            pipeline.set(this.presenceKey(member.roomId, member.userId), '1', 'EX', ttlSeconds);
+            pipeline.set(
+                this.presenceKey(member.roomId, member.userId),
+                "1",
+                "EX",
+                ttlSeconds,
+            );
         }
         const results = await pipeline.exec();
         const failed = results?.find(([error]) => error);
@@ -155,10 +180,14 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
     }
 
     /** Returns, in order, whether each member currently has a presence key. */
-    async getPresence(members: Array<{ roomId: string; userId: string }>): Promise<boolean[]> {
+    async getPresence(
+        members: Array<{ roomId: string; userId: string }>,
+    ): Promise<boolean[]> {
         if (members.length === 0) return [];
         const values = await this.client.mget(
-            ...members.map((member) => this.presenceKey(member.roomId, member.userId)),
+            ...members.map((member) =>
+                this.presenceKey(member.roomId, member.userId),
+            ),
         );
         return values.map((value) => value !== null);
     }
@@ -167,7 +196,10 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         await this.client.del(this.presenceKey(roomId, userId));
     }
 
-    async delRoomState(roomCode: string, expectedRoomId: string): Promise<boolean> {
+    async delRoomState(
+        roomCode: string,
+        expectedRoomId: string,
+    ): Promise<boolean> {
         const key = `room:${roomCode}:state`;
         const script = `
             if redis.call('HGET', KEYS[1], 'roomId') ~= ARGV[1] then return 0 end
@@ -179,10 +211,7 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
     async publicSyncPulse(roomCode: string, payload: unknown): Promise<void> {
         const channel = `sync:pulse:${roomCode}`;
 
-        await this.publisher.publish(
-            channel, 
-            JSON.stringify(payload)
-        );
+        await this.publisher.publish(channel, JSON.stringify(payload));
     }
 
     async getRoomState(roomCode: string): Promise<Record<string, string>> {

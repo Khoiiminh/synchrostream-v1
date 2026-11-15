@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 
 /**
- * A helper utility designed to handle retry logic with exponential backoff 
+ * A helper utility designed to handle retry logic with exponential backoff
  * for asynchronous operations (typically used with Redis or unreliable network calls).
  */
 @Injectable()
@@ -10,19 +10,19 @@ export class RedisRetryHelper {
 
     /**
      * Executes an asynchronous operation with automatic retries and exponential backoff.
-     * 
+     *
      * ### Mechanism & Backoff Equation
-     * If an operation fails, the helper catches the error, waits for an exponentially 
-     * increasing delay, and tries again up to `maxAttempts`. 
-     * 
+     * If an operation fails, the helper catches the error, waits for an exponentially
+     * increasing delay, and tries again up to `maxAttempts`.
+     *
      * The waiting delay for each retry is calculated using the formula:
      * delayMs = initialDelayMs * 2^(attempt - 1)
-     * 
+     *
      * Progression Example (with initialDelayMs = 200):
      * - After Attempt 1 failure: Waits 200 * (2^0) = 200 ms
      * - After Attempt 2 failure: Waits 200 * (2^1) = 400 ms
      * - After Attempt 3 failure: Waits 200 * (2^2) = 800 ms
-     * 
+     *
      * ### Usage Example
      * ```ts
      * // Inside a NestJS service
@@ -32,7 +32,7 @@ export class RedisRetryHelper {
      *     200 // initialDelayMs
      * );
      * ```
-     * 
+     *
      * @template T The return type of the asynchronous operation.
      * @param operation An async function to execute and potentially retry.
      * @param maxAttempts The maximum number of total attempts allowed (must be an integer >= 1). Defaults to `3`.
@@ -46,11 +46,11 @@ export class RedisRetryHelper {
         initialDelayMs = 200,
     ): Promise<T> {
         if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-            throw new Error('maxAttempts must be a positive integer');
+            throw new Error("maxAttempts must be a positive integer");
         }
 
         if (!Number.isFinite(initialDelayMs) || initialDelayMs < 0) {
-            throw new Error('initialDelayMs must be non-negative');
+            throw new Error("initialDelayMs must be non-negative");
         }
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -58,14 +58,24 @@ export class RedisRetryHelper {
                 return await operation();
             } catch (error) {
                 if (attempt === maxAttempts) {
-                    this.logger.error({ message: 'Operation failed after all retry attempts', maxAttempts, err: error });
+                    this.logger.error({
+                        message: "Operation failed after all retry attempts",
+                        maxAttempts,
+                        err: error,
+                    });
 
                     throw error;
                 }
 
                 const delayMs = initialDelayMs * 2 ** (attempt - 1);
 
-                this.logger.warn({ message: 'Operation failed; retrying', attempt, maxAttempts, delayMs, err: error });
+                this.logger.warn({
+                    message: "Operation failed; retrying",
+                    attempt,
+                    maxAttempts,
+                    delayMs,
+                    err: error,
+                });
 
                 await new Promise<void>((resolve) => {
                     setTimeout(resolve, delayMs);
@@ -73,6 +83,6 @@ export class RedisRetryHelper {
             }
         }
 
-        throw new Error('Retry loop exited unexpectedly');
+        throw new Error("Retry loop exited unexpectedly");
     }
 }

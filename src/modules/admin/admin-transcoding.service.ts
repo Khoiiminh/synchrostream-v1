@@ -1,10 +1,15 @@
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import {
+    Injectable,
+    Logger,
+    NotFoundException,
+    OnModuleInit,
+} from "@nestjs/common";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import * as path from "path";
-import * as fs from 'fs';
+import * as fs from "fs";
 import { ConfigService } from "@nestjs/config";
 import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
 import { Readable } from "stream";
@@ -22,25 +27,34 @@ export class AdminTranscodingService implements OnModuleInit {
 
     onModuleInit() {
         try {
-            this.logger.log({ message: 'Using bundled FFmpeg binary', path: ffmpegInstaller.path });
+            this.logger.log({
+                message: "Using bundled FFmpeg binary",
+                path: ffmpegInstaller.path,
+            });
             ffmpeg.setFfmpegPath(ffmpegInstaller.path);
         } catch (error) {
-            this.logger.error({ message: 'Failed to configure FFmpeg binary path', err: error });
+            this.logger.error({
+                message: "Failed to configure FFmpeg binary path",
+                err: error,
+            });
         }
     }
 
     private runFfmpegAsPromise(command: ffmpeg.FfmpegCommand): Promise<void> {
         return new Promise((resolve, reject) => {
             command
-                .on('start', (cmdStr) => {
-                    this.logger.debug({ message: 'FFmpeg started', command: cmdStr });
+                .on("start", (cmdStr) => {
+                    this.logger.debug({
+                        message: "FFmpeg started",
+                        command: cmdStr,
+                    });
                 })
-                .on('end', () => {
+                .on("end", () => {
                     resolve();
                 })
-                .on('error', (err, stdout, stderr) => {
-                    this.logger.error({ message: 'FFmpeg failed', err });
-                    this.logger.debug({ message: 'FFmpeg stderr', stderr })
+                .on("error", (err, stdout, stderr) => {
+                    this.logger.error({ message: "FFmpeg failed", err });
+                    this.logger.debug({ message: "FFmpeg stderr", stderr });
                     reject(err);
                 })
                 .run();
@@ -48,68 +62,100 @@ export class AdminTranscodingService implements OnModuleInit {
     }
 
     async initiateBackgroundTranscode(movieId: string): Promise<void> {
-        this.logger.log({ message: 'Transcode requested', movieId });
+        this.logger.log({ message: "Transcode requested", movieId });
         // 1. Move DB verification where it belongs
         const checkMovieQuery = `SELECT id, status FROM movies WHERE id = $1`;
-        const movies = await this.pg.query<{ id: string, status: string}>(checkMovieQuery, [movieId]);
+        const movies = await this.pg.query<{ id: string; status: string }>(
+            checkMovieQuery,
+            [movieId],
+        );
 
         if (!movies || movies.rows.length === 0) {
-            this.logger.warn({ message: 'Transcode rejected: movie not found', movieId });
-            throw new NotFoundException("Requested movie profile not found in database.");
+            this.logger.warn({
+                message: "Transcode rejected: movie not found",
+                movieId,
+            });
+            throw new NotFoundException(
+                "Requested movie profile not found in database.",
+            );
         }
 
         const targetMovie = movies.rows[0];
         const mezzanineKey = `raw-mezzanines/${targetMovie.id}.mp4`;
 
-        this.logger.debug({ message: 'Movie verified; starting transcode pipeline', movieId });
+        this.logger.debug({
+            message: "Movie verified; starting transcode pipeline",
+            movieId,
+        });
 
         const updateProcessing = `UPDATE movies SET status = 'PROCESSING'::processing_status WHERE id = $1;`;
         await this.pg.query(updateProcessing, [movieId]);
 
         /// TELEMETRY BROADCAST: Notify UI that transcoding has officially begun
-        this.telemetryGateway.broadcastMovieStatusUpdate({ movieId, status: 'PROCESSING' });
+        this.telemetryGateway.broadcastMovieStatusUpdate({
+            movieId,
+            status: "PROCESSING",
+        });
 
         // 2. Offload execution asynchronously to fire-and-forget the HTTP worker loop
-        this.executeTranscodePipeline({ movieId: targetMovie.id, mezzanineKey })
-            .catch((err) => {
-                this.logger.error({ message: 'Transcode pipeline failed unexpectedly', movieId, err });
+        this.executeTranscodePipeline({
+            movieId: targetMovie.id,
+            mezzanineKey,
+        }).catch((err: unknown) => {
+            this.logger.error({
+                message: "Transcode pipeline failed unexpectedly",
+                movieId,
+                err,
             });
+        });
     }
 
     /**
-     * Spawns a fluent-ffmpeg execution pipeline to transform a mezzanine file into 
+     * Spawns a fluent-ffmpeg execution pipeline to transform a mezzanine file into
      * synchronous adaptive bitrates and streams them out to Cloudflare R2 bucket destination.
      */
-    async executeTranscodePipeline({ movieId, mezzanineKey }: {movieId: string, mezzanineKey: string}): Promise<void> {
-        this.logger.log({ message: 'Transcode started', movieId });
+    async executeTranscodePipeline({
+        movieId,
+        mezzanineKey,
+    }: {
+        movieId: string;
+        mezzanineKey: string;
+    }): Promise<void> {
+        this.logger.log({ message: "Transcode started", movieId });
 
-        const baseTempDir = this.configService.get<string>('TRANSCODE_TEMP_DIR') || 'D:/synchrostream_temp';
+        const baseTempDir =
+            this.configService.get<string>("TRANSCODE_TEMP_DIR") ||
+            "D:/synchrostream_temp";
 
         // Setup structural operational paths under standard environment temp scopes
         const tmpDir = path.join(baseTempDir, `transcode-${movieId}`);
         const localInputPath = path.join(tmpDir, `mezzanine.mp4`);
-        const outDir360p = path.join(tmpDir, '360p');
-        const outDir804p = path.join(tmpDir, '804p');
+        const outDir360p = path.join(tmpDir, "360p");
+        const outDir804p = path.join(tmpDir, "804p");
 
         try {
             // 1. Create temporary directory scaffolding
             // Ensure scratch folders exist structurally
-            if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-            if (!fs.existsSync(outDir360p)) fs.mkdirSync(outDir360p, { recursive: true });
-            if (!fs.existsSync(outDir804p)) fs.mkdirSync(outDir804p, { recursive: true });
+            if (!fs.existsSync(tmpDir))
+                fs.mkdirSync(tmpDir, { recursive: true });
+            if (!fs.existsSync(outDir360p))
+                fs.mkdirSync(outDir360p, { recursive: true });
+            if (!fs.existsSync(outDir804p))
+                fs.mkdirSync(outDir804p, { recursive: true });
 
             // 2. Stream the input file from R2 straight onto local temp storage disk
-            this.logger.debug({ message: 'Downloading source file', movieId });
+            this.logger.debug({ message: "Downloading source file", movieId });
             const masterStream = await this.r2.getObjectStream(mezzanineKey);
 
             // Verify headers or handle empty stream bounds early
             if (!masterStream) {
-                throw new Error(`Cloud asset retrieval failed: Received an unreadable object stream reference for ${mezzanineKey}`);
+                throw new Error(
+                    `Cloud asset retrieval failed: Received an unreadable object stream reference for ${mezzanineKey}`,
+                );
             }
 
             const inputWriteStream = fs.createWriteStream(localInputPath);
 
-            
             await new Promise<void>((resolve, reject) => {
                 let bytesReceived = 0;
                 let isSettled = false; // Guard to prevent multi-resolving/rejecting
@@ -127,25 +173,40 @@ export class AdminTranscodingService implements OnModuleInit {
                     resolve();
                 };
 
-                masterStream.on('data', (chunk) => {
+                masterStream.on("data", (chunk: Buffer) => {
                     bytesReceived += chunk.length;
                 });
 
-                masterStream.on('error', (error) => {
-                    safeReject(new Error(`R2 Stream Download Failure: ${error.message}`));
+                masterStream.on("error", (error) => {
+                    safeReject(
+                        new Error(
+                            `R2 Stream Download Failure: ${error.message}`,
+                        ),
+                    );
                 });
 
                 // Handle the pipeline itself to intercept unpipe or core failures
-                inputWriteStream.on('error', (error) => {
-                    safeReject(new Error(`Local File Write Storage Failure: ${error.message}`));
+                inputWriteStream.on("error", (error) => {
+                    safeReject(
+                        new Error(
+                            `Local File Write Storage Failure: ${error.message}`,
+                        ),
+                    );
                 });
 
                 // Rely EXCLUSIVELY on 'close' as the definitive end-of-lifecycle token
-                inputWriteStream.on('close', () => {
+                inputWriteStream.on("close", () => {
                     if (bytesReceived === 0) {
-                        return safeReject(new Error(`Zero bytes written to disk. Cloud file is not fully propagated yet.`));
+                        return safeReject(
+                            new Error(
+                                `Zero bytes written to disk. Cloud file is not fully propagated yet.`,
+                            ),
+                        );
                     }
-                    this.logger.debug({ message: 'Source file downloaded', movieId });
+                    this.logger.debug({
+                        message: "Source file downloaded",
+                        movieId,
+                    });
                     safeResolve();
                 });
 
@@ -155,80 +216,95 @@ export class AdminTranscodingService implements OnModuleInit {
 
             // DEFENSIVE WORKER GATE: Pre-flight explicit confirmation validation
             if (!fs.existsSync(localInputPath)) {
-                throw new Error(`Media Engine Panic: Target input track missing on local directory layer.`);
+                throw new Error(
+                    `Media Engine Panic: Target input track missing on local directory layer.`,
+                );
             }
 
             const stats = fs.statSync(localInputPath);
             if (stats.size === 0) {
-                throw new Error(`Media Engine Panic: Target file size resolved to 0 bytes. Stream truncated.`);
+                throw new Error(
+                    `Media Engine Panic: Target file size resolved to 0 bytes. Stream truncated.`,
+                );
             }
 
-            this.logger.debug({ message: 'Source file verified; starting FFmpeg ladder', movieId, sizeMb: Number((stats.size / (1024 * 1024)).toFixed(2)) });
-            
+            this.logger.debug({
+                message: "Source file verified; starting FFmpeg ladder",
+                movieId,
+                sizeMb: Number((stats.size / (1024 * 1024)).toFixed(2)),
+            });
+
             // 3. Kickoff full multi-variant HLS multi-bitrate compilation directly via local paths
             // This bypasses the single output stream limitation entirely
             const ffmpegCommand = ffmpeg(localInputPath)
                 // Universal optimization flags for random access alignment
-                .inputOptions(['-re'])
+                .inputOptions(["-re"])
 
                 // --- Rendition 1: 360p ---
-                .output(path.join(outDir360p, 'index.m3u8'))
+                .output(path.join(outDir360p, "index.m3u8"))
                 .outputOptions([
-                    '-c:v libx264',
-                    '-b:v 800k',
-                    '-maxrate 856k',
-                    '-bufsize 1200k',
-                    '-s 640x360',
-                    '-c:a aac',
-                    '-b:a 96k',
-                    '-g 48',                  // Strict IDR keyframe boundaries every 48 frames (2 seconds at 24fps)
-                    '-keyint_min 48',
-                    '-sc_threshold 0',         // Prevents scene changes from corrupting chunk time synchronization
-                    '-f hls',
-                    '-hls_time 4',             // Target 4-second chunk intervals matching blueprint spec
-                    '-hls_playlist_type vod',
-                    '-hls_segment_type fmp4',  // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
-                    '-hls_fmp4_init_filename', // Explicitly bundle the initialization map file inside the 360p subdirectory!
-                    path.join(outDir360p, 'init.mp4'),
-                    `-hls_segment_filename ${path.join(outDir360p, 'chunk_%03d.m4s')}`
+                    "-c:v libx264",
+                    "-b:v 800k",
+                    "-maxrate 856k",
+                    "-bufsize 1200k",
+                    "-s 640x360",
+                    "-c:a aac",
+                    "-b:a 96k",
+                    "-g 48", // Strict IDR keyframe boundaries every 48 frames (2 seconds at 24fps)
+                    "-keyint_min 48",
+                    "-sc_threshold 0", // Prevents scene changes from corrupting chunk time synchronization
+                    "-f hls",
+                    "-hls_time 4", // Target 4-second chunk intervals matching blueprint spec
+                    "-hls_playlist_type vod",
+                    "-hls_segment_type fmp4", // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
+                    "-hls_fmp4_init_filename", // Explicitly bundle the initialization map file inside the 360p subdirectory!
+                    path.join(outDir360p, "init.mp4"),
+                    `-hls_segment_filename ${path.join(outDir360p, "chunk_%03d.m4s")}`,
                 ])
                 // Output Variant 2: 804p High-Bitrate Master Branch
-                .output(path.join(outDir804p, 'index.m3u8'))
+                .output(path.join(outDir804p, "index.m3u8"))
                 .outputOptions([
-                    '-c:v libx264',
-                    '-b:v 4500k',
-                    '-maxrate 4815k',
-                    '-bufsize 7000k',
-                    '-s 1430x804',
-                    '-c:a aac',
-                    '-b:a 128k',
-                    '-g 48',
-                    '-keyint_min 48',
-                    '-sc_threshold 0',
-                    '-f hls',
-                    '-hls_time 4',
-                    '-hls_playlist_type vod',
-                    '-hls_segment_type fmp4',  // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
-                    '-hls_fmp4_init_filename',
-                    path.join(outDir804p, 'init.mp4'),
-                    `-hls_segment_filename ${path.join(outDir804p, 'chunk_%03d.m4s')}`
+                    "-c:v libx264",
+                    "-b:v 4500k",
+                    "-maxrate 4815k",
+                    "-bufsize 7000k",
+                    "-s 1430x804",
+                    "-c:a aac",
+                    "-b:a 128k",
+                    "-g 48",
+                    "-keyint_min 48",
+                    "-sc_threshold 0",
+                    "-f hls",
+                    "-hls_time 4",
+                    "-hls_playlist_type vod",
+                    "-hls_segment_type fmp4", // FORCES CMAF FRAGMENTED MP4 CONTAINER WRITING (.m4s)
+                    "-hls_fmp4_init_filename",
+                    path.join(outDir804p, "init.mp4"),
+                    `-hls_segment_filename ${path.join(outDir804p, "chunk_%03d.m4s")}`,
                 ]);
 
-            this.logger.debug({ message: 'Encoding variants', movieId });
+            this.logger.debug({ message: "Encoding variants", movieId });
             await this.runFfmpegAsPromise(ffmpegCommand);
-            this.logger.log({ message: 'Encoding completed; uploading HLS output', movieId });
+            this.logger.log({
+                message: "Encoding completed; uploading HLS output",
+                movieId,
+            });
 
             // 4. Generate the master manifest topology structure textually
-            const masterManifestContent = 
+            const masterManifestContent =
                 `#EXTM3U\n` +
                 `#EXT-X-VERSION:3\n` +
                 `#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\n` +
                 `360p/index.m3u8\n` +
                 `#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=1430x804\n` +
                 `804p/index.m3u8\n`;
-            
-            const masterManifestPath = path.join(tmpDir, 'master.m3u8');
-            fs.writeFileSync(masterManifestPath, masterManifestContent, 'utf-8');
+
+            const masterManifestPath = path.join(tmpDir, "master.m3u8");
+            fs.writeFileSync(
+                masterManifestPath,
+                masterManifestContent,
+                "utf-8",
+            );
 
             // 5. Gather and upload all assets (skipping initial source file raw mezzanine copy)
             const getFileRecursively = (dir: string): string[] => {
@@ -245,53 +321,79 @@ export class AdminTranscodingService implements OnModuleInit {
                 });
 
                 return results;
-            }
+            };
 
             const allGeneratedFiles = getFileRecursively(tmpDir);
-            this.logger.debug({ message: 'Uploading HLS artifacts to R2', movieId, count: allGeneratedFiles.length });
+            this.logger.debug({
+                message: "Uploading HLS artifacts to R2",
+                movieId,
+                count: allGeneratedFiles.length,
+            });
 
             // 6. STREAM REPLICATED ARTIFACTS DIRECTLY TO R2 BUCKET TARGET CORES
             for (const localFilePath of allGeneratedFiles) {
                 // Determine the nested relative path structure (e.g. "360p/index.m3u8" or "master.m3u8")
-                const relativePath = path.relative(tmpDir, localFilePath).replace(/\\/g, '/');
+                const relativePath = path
+                    .relative(tmpDir, localFilePath)
+                    .replace(/\\/g, "/");
                 const destinationR2Key = `film/${movieId}/${relativePath}`;
 
                 // Establish high-fidelity Mime-Type for HLS streaming components
-                let contentType = 'application/octet-stream';
-                if (localFilePath.endsWith('.m3u8')) contentType = 'application/x-mpegURL';
-                if (localFilePath.endsWith('.ts')) contentType = 'video/mp2t';
-                if (localFilePath.endsWith('.m4s')) contentType = 'video/iso.segment';
-                if (localFilePath.endsWith('.mpd')) contentType = 'application/dash+xml';
-                if (localFilePath.endsWith('.mp4')) contentType = 'video/mp4';
+                let contentType = "application/octet-stream";
+                if (localFilePath.endsWith(".m3u8"))
+                    contentType = "application/x-mpegURL";
+                if (localFilePath.endsWith(".ts")) contentType = "video/mp2t";
+                if (localFilePath.endsWith(".m4s"))
+                    contentType = "video/iso.segment";
+                if (localFilePath.endsWith(".mpd"))
+                    contentType = "application/dash+xml";
+                if (localFilePath.endsWith(".mp4")) contentType = "video/mp4";
 
                 // Skip uploading the original raw mezzanine file if it got caught in the temp workspace pathing
-                if (localFilePath.endsWith('mezzanine.mp4')) {
+                if (localFilePath.endsWith("mezzanine.mp4")) {
                     continue;
                 }
 
                 let uploadBody: Readable;
 
-                if (localFilePath.endsWith('.m3u8')) {
+                if (localFilePath.endsWith(".m3u8")) {
                     // Read the manifest file into memory as text
-                    let manifestContent = fs.readFileSync(localFilePath, 'utf-8');
+                    let manifestContent = fs.readFileSync(
+                        localFilePath,
+                        "utf-8",
+                    );
 
                     // Force remove any "file:///D:/..." or "file:///D:\..." variants
                     // This matches 'file://' followed by an optional slash, 'D:', and any combinations of / or \
-                    const fileUrlRegex = new RegExp(`file:\/\/\/?D:[\/\\\\][^\n\r]*?${movieId}[\/\\\\](360p|804p)[\/\\\\]`, 'g');
-                    manifestContent = manifestContent.replace(fileUrlRegex, '');
+                    const fileUrlRegex = new RegExp(
+                        `file:///?D:[/\\\\][^\n\r]*?${movieId}[/\\\\](360p|804p)[/\\\\]`,
+                        "g",
+                    );
+                    manifestContent = manifestContent.replace(fileUrlRegex, "");
 
                     // Catch any bare absolute paths like "D:\synchrostream_temp\transcode-xxx\804p\"
-                    const absolutePathRegex = new RegExp(`D:[\/\\\\][^\n\r]*?${movieId}[\/\\\\](360p|804p)[\/\\\\]`, 'g');
-                    manifestContent = manifestContent.replace(absolutePathRegex, '');
-
-                    // Standardize backslashes for absolute directory text parsing
-                    const standardizedTmpDir = tmpDir.replace(/\\/g, '/');
+                    const absolutePathRegex = new RegExp(
+                        `D:[/\\\\][^\n\r]*?${movieId}[/\\\\](360p|804p)[/\\\\]`,
+                        "g",
+                    );
+                    manifestContent = manifestContent.replace(
+                        absolutePathRegex,
+                        "",
+                    );
 
                     // 3. Ultimate safety catch-all: strip out any lingering explicit variant path strings entirely
-                    manifestContent = manifestContent.split(`transcode-${movieId}/360p/`).join('');
-                    manifestContent = manifestContent.split(`transcode-${movieId}\\360p\\`).join('');
-                    manifestContent = manifestContent.split(`transcode-${movieId}/804p/`).join('');
-                    manifestContent = manifestContent.split(`transcode-${movieId}\\804p\\`).join('');
+                    manifestContent = manifestContent
+                        .split(`transcode-${movieId}/360p/`)
+                        .join("");
+                    manifestContent = manifestContent
+                        .split(`transcode-${movieId}\\360p\\`)
+                        .join("");
+                    manifestContent = manifestContent
+                        .split(`transcode-${movieId}/804p/`)
+                        .join("");
+                    manifestContent = manifestContent
+                        .split(`transcode-${movieId}\\804p\\`)
+                        .join("");
 
                     uploadBody = Readable.from(manifestContent);
                 } else {
@@ -299,8 +401,12 @@ export class AdminTranscodingService implements OnModuleInit {
                     uploadBody = fs.createReadStream(localFilePath);
                 }
 
-                this.logger.debug({ message: 'Uploading HLS artifact', key: destinationR2Key, contentType });
-                
+                this.logger.debug({
+                    message: "Uploading HLS artifact",
+                    key: destinationR2Key,
+                    contentType,
+                });
+
                 await this.r2.uploadStream({
                     key: destinationR2Key,
                     stream: uploadBody,
@@ -309,7 +415,11 @@ export class AdminTranscodingService implements OnModuleInit {
             }
 
             const finalManifestKey = `film/${movieId}/master.m3u8`;
-            this.logger.debug({ message: 'HLS upload complete; registering manifest', movieId, manifestKey: finalManifestKey });
+            this.logger.debug({
+                message: "HLS upload complete; registering manifest",
+                movieId,
+                manifestKey: finalManifestKey,
+            });
 
             // 7. STATE BOUNDARY SYNCHRONIZATION VIA POSTGRES MUTATION
             const assetSyncQuery = `
@@ -323,34 +433,56 @@ export class AdminTranscodingService implements OnModuleInit {
 
             await this.pg.query(assetSyncQuery, [finalManifestKey, movieId]);
 
-            this.logger.log({ message: 'Transcode completed; movie AVAILABLE', movieId });
+            this.logger.log({
+                message: "Transcode completed; movie AVAILABLE",
+                movieId,
+            });
 
             // Broadcast live data via WebSockets to alert the client UI dashboard context
-            this.telemetryGateway.broadcastMovieStatusUpdate({ 
-                movieId, 
-                status: 'AVAILABLE', 
-                hlsUrl: finalManifestKey 
+            this.telemetryGateway.broadcastMovieStatusUpdate({
+                movieId,
+                status: "AVAILABLE",
+                hlsUrl: finalManifestKey,
             });
-                
         } catch (error) {
-            this.logger.error({ message: 'Transcode failed', movieId, err: error });
+            this.logger.error({
+                message: "Transcode failed",
+                movieId,
+                err: error,
+            });
             try {
                 const failStatusQuery = `UPDATE movies SET status = 'FAILED'::processing_status WHERE id = $1;`;
                 await this.pg.query(failStatusQuery, [movieId]);
 
                 // FAILURE BROADCAST: Inform UI that transcoding hit a structural exception
-                this.telemetryGateway.broadcastMovieStatusUpdate({ movieId, status: 'FAILED' });
+                this.telemetryGateway.broadcastMovieStatusUpdate({
+                    movieId,
+                    status: "FAILED",
+                });
             } catch (dbError) {
-                this.logger.error({ message: 'Failed to mark movie as FAILED after transcode error', movieId, err: dbError });
+                this.logger.error({
+                    message:
+                        "Failed to mark movie as FAILED after transcode error",
+                    movieId,
+                    err: dbError,
+                });
             }
         } finally {
             try {
                 if (fs.existsSync(tmpDir)) {
                     fs.rmSync(tmpDir, { recursive: true, force: true });
-                    this.logger.debug({ message: 'Removed transcode workspace', movieId });
+                    this.logger.debug({
+                        message: "Removed transcode workspace",
+                        movieId,
+                    });
                 }
             } catch (cleanupError) {
-                this.logger.error({ message: 'Failed to remove transcode workspace', movieId, dir: tmpDir, err: cleanupError });
+                this.logger.error({
+                    message: "Failed to remove transcode workspace",
+                    movieId,
+                    dir: tmpDir,
+                    err: cleanupError,
+                });
             }
         }
     }

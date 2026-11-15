@@ -15,9 +15,7 @@ export interface CreateSfuMediaSessionResponse {
 export class SfuControlClient {
     private readonly logger = new Logger(SfuControlClient.name);
 
-    constructor(
-        private readonly configService: ConfigService,
-    ) {}
+    constructor(private readonly configService: ConfigService) {}
 
     async createMediaSession(
         endpoint: string,
@@ -26,17 +24,14 @@ export class SfuControlClient {
         const baseUrl = endpoint.replace(/\/$/, "");
         const secret = this.getSecret();
 
-        const response = await fetch(
-            `${baseUrl}/control/media-sessions`,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${secret}`,
-                },
-                body: JSON.stringify(request),
+        const response = await fetch(`${baseUrl}/control/media-sessions`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${secret}`,
             },
-        );
+            body: JSON.stringify(request),
+        });
 
         if (!response.ok) {
             const message = await response.text();
@@ -54,7 +49,7 @@ export class SfuControlClient {
             );
         }
 
-        return await response.json() as CreateSfuMediaSessionResponse;
+        return (await response.json()) as CreateSfuMediaSessionResponse;
     }
 
     async endMediaSession(
@@ -90,20 +85,16 @@ export class SfuControlClient {
         }
     }
 
-
     async getHealth(endpoint: string): Promise<unknown> {
         const baseUrl = endpoint.replace(/\/$/, "");
         const secret = this.getSecret();
 
-        const response = await fetch(
-            `${baseUrl}/control/health`,
-            {
-                method: "GET",
-                headers: {
-                    Authorization: `Bearer ${secret}`,
-                },
+        const response = await fetch(`${baseUrl}/control/health`, {
+            method: "GET",
+            headers: {
+                Authorization: `Bearer ${secret}`,
             },
-        );
+        });
 
         if (!response.ok) {
             const message = await response.text();
@@ -124,11 +115,11 @@ export class SfuControlClient {
     }
 
     private getSecret(): string {
-        const secret = this.configService.get<string>('SFU_CONTROL_SECRET');
+        const secret = this.configService.get<string>("SFU_CONTROL_SECRET");
 
         if (!secret) {
             throw new Error(
-                'SFU_CONTROL_SECRET is not defined in .env.development',
+                "SFU_CONTROL_SECRET is not defined in .env.development",
             );
         }
 

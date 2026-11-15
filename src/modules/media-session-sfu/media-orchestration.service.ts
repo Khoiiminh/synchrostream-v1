@@ -1,5 +1,9 @@
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+    ConflictException,
+    Injectable,
+    NotFoundException,
+} from "@nestjs/common";
 import { MediaSessionService } from "./media-session.service.js";
 import { SfuControlClient } from "@/shared/infrastructure/sfu/sfu-control.client.js";
 import { MediaSession } from "./media-session.types.js";
@@ -11,7 +15,7 @@ export interface SfuNode {
     nodeId: string;
     endpoint: string;
     signalingEndpoint: string;
-    status: 'HEALTHY' | 'DEGRADED' | 'UNAVAILABLE';
+    status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
     capacity: number;
     lastHeartbeatAt: Date | null;
 }
@@ -28,8 +32,9 @@ export class MediaOrchestrationService {
     async createMediaSessionConnection(
         mediaSessionId: string,
         userId: string,
-    ): Promise<MediaSessionConnectionDto>{
-        const session = await this.mediaSessionService.getMediaSession(mediaSessionId);
+    ): Promise<MediaSessionConnectionDto> {
+        const session =
+            await this.mediaSessionService.getMediaSession(mediaSessionId);
 
         if (session.status !== "ACTIVE") {
             throw new ConflictException(
@@ -58,13 +63,7 @@ export class MediaOrchestrationService {
             participant_id: string;
             user_id: string;
             room_id: string;
-        }>(
-            participantQuery,
-            [
-                session.roomId,
-                userId,
-            ],
-        );
+        }>(participantQuery, [session.roomId, userId]);
 
         if (!participant || participant.rows.length < 1) {
             throw new NotFoundException(
@@ -90,10 +89,7 @@ export class MediaOrchestrationService {
             endpoint: string;
             signaling_endpoint: string;
             status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
-        }>(
-            nodeQuery,
-            [session.assignedSfuNodeId],
-        );
+        }>(nodeQuery, [session.assignedSfuNodeId]);
 
         if (!node || node.rows.length < 1) {
             throw new NotFoundException(
@@ -127,21 +123,18 @@ export class MediaOrchestrationService {
     }
 
     async createMediaSession(roomId: string): Promise<MediaSession> {
-        return this.mediaSessionService.createMediaSession(
-            roomId,
-        );
+        return this.mediaSessionService.createMediaSession(roomId);
     }
 
     async getMediaSessionByRoomId(roomId: string): Promise<MediaSession> {
-        return this.mediaSessionService.getMediaSessionByRoomId(
-            roomId,
-        );
+        return this.mediaSessionService.getMediaSessionByRoomId(roomId);
     }
 
     async startMediaSession(mediaSessionId: string): Promise<MediaSession> {
-        const session = await this.mediaSessionService.getMediaSession(mediaSessionId);
+        const session =
+            await this.mediaSessionService.getMediaSession(mediaSessionId);
 
-        if (session.status !== 'CREATED') {
+        if (session.status !== "CREATED") {
             throw new ConflictException(
                 `MediaSession cannot start from status ${session.status}.`,
             );
@@ -149,20 +142,19 @@ export class MediaOrchestrationService {
 
         const node = await this.selectSfuNode();
 
-        const startingSession = await this.mediaSessionService.startMediaSession(mediaSessionId);
+        const startingSession =
+            await this.mediaSessionService.startMediaSession(mediaSessionId);
 
-        const assignedSession = await this.mediaSessionService.assignMediaSession(
-            startingSession.id,
-            node.nodeId,
-        );
+        const assignedSession =
+            await this.mediaSessionService.assignMediaSession(
+                startingSession.id,
+                node.nodeId,
+            );
 
-        await this.sfuControlClient.createMediaSession(
-            node.endpoint,
-            {
-                mediaSessionId: assignedSession.id,
-                assignedSfuNodeId: node.nodeId,
-            },
-        );
+        await this.sfuControlClient.createMediaSession(node.endpoint, {
+            mediaSessionId: assignedSession.id,
+            assignedSfuNodeId: node.nodeId,
+        });
 
         return this.mediaSessionService.activateMediaSession(
             assignedSession.id,
@@ -196,14 +188,14 @@ export class MediaOrchestrationService {
             node_id: string;
             endpoint: string;
             signaling_endpoint: string;
-            status: 'HEALTHY' | 'DEGRADED' | 'UNAVAILABLE';
+            status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
             capacity: number;
             last_heartbeat_at: Date | null;
         }>(query);
 
         if (!row || row.rows.length < 1) {
             throw new ConflictException(
-                'No available SFU node is currently available.',
+                "No available SFU node is currently available.",
             );
         }
 
@@ -219,7 +211,8 @@ export class MediaOrchestrationService {
     }
 
     async endMediaSession(mediaSessionId: string): Promise<MediaSession> {
-        const session = await this.mediaSessionService.getMediaSession(mediaSessionId);
+        const session =
+            await this.mediaSessionService.getMediaSession(mediaSessionId);
 
         if (session.status !== "ACTIVE") {
             throw new ConflictException(
@@ -259,17 +252,13 @@ export class MediaOrchestrationService {
             );
         }
 
-        await this.mediaSessionService.endMediaSession(
-            mediaSessionId,
-        );
+        await this.mediaSessionService.endMediaSession(mediaSessionId);
 
         await this.sfuControlClient.endMediaSession(
             node.rows[0].endpoint,
             mediaSessionId,
         );
 
-        return this.mediaSessionService.completeMediaSession(
-            mediaSessionId,
-        );
+        return this.mediaSessionService.completeMediaSession(mediaSessionId);
     }
 }

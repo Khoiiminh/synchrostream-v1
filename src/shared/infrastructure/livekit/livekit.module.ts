@@ -8,13 +8,12 @@ import { LiveKitTokenService } from "./livekit.token.service.js";
     providers: [
         {
             provide: LIVEKIT_CONFIG,
-            inject: [
-                ConfigService
-            ],
+            inject: [ConfigService],
             useFactory: (configService: ConfigService): LiveKitConfig => {
-                const url = configService.get<string>('LIVEKIT_URL');
-                const apiKey = configService.get<string>('LIVEKIT_API_KEY');
-                const apiSecret = configService.get<string>('LIVEKIT_API_SECRET');
+                const url = configService.get<string>("LIVEKIT_URL");
+                const apiKey = configService.get<string>("LIVEKIT_API_KEY");
+                const apiSecret =
+                    configService.get<string>("LIVEKIT_API_SECRET");
 
                 if (!url) {
                     throw new Error("LIVEKIT_URL is not configured.");

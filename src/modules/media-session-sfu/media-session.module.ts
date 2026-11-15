@@ -4,9 +4,7 @@ import { MediaSessionService } from "./media-session.service.js";
 import { MediaOrchestrationService } from "./media-orchestration.service.js";
 
 @Module({
-    imports: [
-        InfrastructureModule,
-    ],
+    imports: [InfrastructureModule],
 
     // MediaSessionController (/v1/media-sessions/*) is intentionally NOT mounted.
     // The self-built SFU is out of scope, and its endpoints let any authenticated
@@ -15,14 +13,8 @@ import { MediaOrchestrationService } from "./media-orchestration.service.js";
     // membership/provider authorization when SFU work resumes.
     controllers: [],
 
-    providers: [
-        MediaSessionService,
-        MediaOrchestrationService,
-    ],
+    providers: [MediaSessionService, MediaOrchestrationService],
 
-    exports: [
-        MediaSessionService,
-        MediaOrchestrationService,
-    ],
+    exports: [MediaSessionService, MediaOrchestrationService],
 })
 export class MediaSessionModule {}

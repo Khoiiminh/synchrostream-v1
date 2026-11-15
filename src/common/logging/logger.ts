@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import type { LoggerService } from "@nestjs/common";
-import { pino, stdSerializers, type Logger as PinoLogger, type LoggerOptions } from "pino";
+import {
+    pino,
+    stdSerializers,
+    type Logger as PinoLogger,
+    type LoggerOptions,
+} from "pino";
 
 /**
  * Shared backend logger.
@@ -50,9 +55,18 @@ function buildOptions(service: string): LoggerOptions {
         // Never write credentials, even if a caller passes a whole request/body object.
         redact: {
             paths: [
-                "password", "*.password", "newPassword", "*.newPassword",
-                "token", "*.token", "accessToken", "refreshToken",
-                "authorization", "*.authorization", "headers.authorization", "headers.cookie",
+                "password",
+                "*.password",
+                "newPassword",
+                "*.newPassword",
+                "token",
+                "*.token",
+                "accessToken",
+                "refreshToken",
+                "authorization",
+                "*.authorization",
+                "headers.authorization",
+                "headers.cookie",
             ],
             censor: "[redacted]",
         },
@@ -61,13 +75,19 @@ function buildOptions(service: string): LoggerOptions {
     if (format === "pretty" && prettyTransportAvailable()) {
         options.transport = {
             target: "pino-pretty",
-            options: { translateTime: "SYS:HH:MM:ss.l", ignore: "pid,hostname,service", messageKey: "msg" },
+            options: {
+                translateTime: "SYS:HH:MM:ss.l",
+                ignore: "pid,hostname,service",
+                messageKey: "msg",
+            },
         };
     }
     return options;
 }
 
-export const rootLogger: PinoLogger = pino(buildOptions("synchrostream-backend"));
+export const rootLogger: PinoLogger = pino(
+    buildOptions("synchrostream-backend"),
+);
 
 /**
  * Nest framework contexts whose startup chatter ("Mapped {/v1/...} route",
@@ -95,12 +115,24 @@ const STACK_PATTERN = /^\s*at |\n\s+at /;
 export class AppLogger implements LoggerService {
     constructor(private readonly logger: PinoLogger = rootLogger) {}
 
-    log(message: unknown, ...params: unknown[]) { this.write("info", message, params); }
-    error(message: unknown, ...params: unknown[]) { this.write("error", message, params); }
-    warn(message: unknown, ...params: unknown[]) { this.write("warn", message, params); }
-    debug(message: unknown, ...params: unknown[]) { this.write("debug", message, params); }
-    verbose(message: unknown, ...params: unknown[]) { this.write("trace", message, params); }
-    fatal(message: unknown, ...params: unknown[]) { this.write("fatal", message, params); }
+    log(message: unknown, ...params: unknown[]) {
+        this.write("info", message, params);
+    }
+    error(message: unknown, ...params: unknown[]) {
+        this.write("error", message, params);
+    }
+    warn(message: unknown, ...params: unknown[]) {
+        this.write("warn", message, params);
+    }
+    debug(message: unknown, ...params: unknown[]) {
+        this.write("debug", message, params);
+    }
+    verbose(message: unknown, ...params: unknown[]) {
+        this.write("trace", message, params);
+    }
+    fatal(message: unknown, ...params: unknown[]) {
+        this.write("fatal", message, params);
+    }
 
     private write(level: Level, message: unknown, params: unknown[]): void {
         const rest = [...params];
@@ -114,7 +146,12 @@ export class AppLogger implements LoggerService {
             }
         }
 
-        if (level === "info" && context && FRAMEWORK_DEBUG_CONTEXTS.has(context)) level = "debug";
+        if (
+            level === "info" &&
+            context &&
+            FRAMEWORK_DEBUG_CONTEXTS.has(context)
+        )
+            level = "debug";
         if (!this.logger.isLevelEnabled(level)) return;
 
         const fields: LogFields = {};
@@ -128,7 +165,12 @@ export class AppLogger implements LoggerService {
             const { message: text, ...other } = message as LogFields;
             Object.assign(fields, other);
             msg = typeof text === "string" ? text : undefined;
-        } else if (message !== undefined) {
+        } else if (
+            typeof message === "string" ||
+            typeof message === "number" ||
+            typeof message === "boolean" ||
+            typeof message === "bigint"
+        ) {
             msg = String(message);
         }
 
@@ -138,10 +180,17 @@ export class AppLogger implements LoggerService {
             if (param instanceof Error) {
                 fields.err = param;
             } else if (typeof param === "string" && STACK_PATTERN.test(param)) {
-                if (!(fields.err instanceof Error) && !(fields.error instanceof Error)) {
+                if (
+                    !(fields.err instanceof Error) &&
+                    !(fields.error instanceof Error)
+                ) {
                     fields.err = { message: msg, stack: param };
                 }
-            } else if (param !== null && typeof param === "object" && !Array.isArray(param)) {
+            } else if (
+                param !== null &&
+                typeof param === "object" &&
+                !Array.isArray(param)
+            ) {
                 Object.assign(fields, param);
             } else {
                 details.push(param);
@@ -150,7 +199,8 @@ export class AppLogger implements LoggerService {
         if (details.length > 0) fields.details = details;
         // Errors under any other key would serialize as "{}"; give them the err shape too.
         for (const [key, value] of Object.entries(fields)) {
-            if (key !== "err" && value instanceof Error) fields[key] = stdSerializers.err(value);
+            if (key !== "err" && value instanceof Error)
+                fields[key] = stdSerializers.err(value);
         }
 
         this.logger[level](fields, msg);
@@ -158,7 +208,9 @@ export class AppLogger implements LoggerService {
 }
 
 /** Best-effort masking for e-mail addresses written to logs: "jane.doe@x.com" -> "ja***@x.com". */
-export function maskEmail(email: string | undefined | null): string | undefined {
+export function maskEmail(
+    email: string | undefined | null,
+): string | undefined {
     if (!email) return undefined;
     const at = email.indexOf("@");
     if (at <= 0) return "***";

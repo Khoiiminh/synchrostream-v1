@@ -6,7 +6,11 @@ import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
 
 @Module({
     controllers: [AdminController],
-    providers: [AdminIngestionService, AdminTranscodingService, MediaTelemetryGateway],
-    exports: [AdminIngestionService, AdminTranscodingService]
+    providers: [
+        AdminIngestionService,
+        AdminTranscodingService,
+        MediaTelemetryGateway,
+    ],
+    exports: [AdminIngestionService, AdminTranscodingService],
 })
 export class AdminModule {}

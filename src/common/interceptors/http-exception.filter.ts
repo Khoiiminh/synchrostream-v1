@@ -1,63 +1,70 @@
 import {
-  ArgumentsHost,
-  Catch,
-  ExceptionFilter,
-  HttpException,
-  HttpStatus,
-  Logger,
+    ArgumentsHost,
+    Catch,
+    ExceptionFilter,
+    HttpException,
+    HttpStatus,
+    Logger,
 } from "@nestjs/common";
 import { Response } from "express";
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(GlobalExceptionFilter.name);
+    private readonly logger = new Logger(GlobalExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<Response>();
+    catch(exception: unknown, host: ArgumentsHost) {
+        const ctx = host.switchToHttp();
+        const response = ctx.getResponse<Response>();
 
-    // Determine if the error is a recognized NestJS HttpException, or a raw 500 runtime crash
-    const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+        // Determine if the error is a recognized NestJS HttpException, or a raw 500 runtime crash
+        const status =
+            exception instanceof HttpException
+                ? exception.getStatus()
+                : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    // Extract the error message strings
-    let message = "An unexpected backend error occurred";
-    let errorData: any = null;
+        // Extract the error message strings
+        let message = "An unexpected backend error occurred";
+        let errorData: unknown = null;
 
-    if (exception instanceof HttpException) {
-      const resBody = exception.getResponse();
+        if (exception instanceof HttpException) {
+            const resBody = exception.getResponse();
 
-      if (typeof resBody === "string") {
-        message = resBody;
-      } else if (typeof resBody === "object" && resBody !== null) {
-        //NestJS validation pipe stores array errors inside 'message'
-        const nestMessage = (resBody as any).message;
-        message = Array.isArray(nestMessage)
-          ? "Validation failed"
-          : (nestMessage || exception.message);
+            if (typeof resBody === "string") {
+                message = resBody;
+            } else if (typeof resBody === "object" && resBody !== null) {
+                //NestJS validation pipe stores array errors inside 'message'
+                const body = resBody as Record<string, unknown>;
+                const nestMessage = body.message;
+                message = Array.isArray(nestMessage)
+                    ? "Validation failed"
+                    : (typeof nestMessage === "string" && nestMessage) ||
+                      exception.message;
 
-        // If it's a validation error array, pass the details into the 'data' field
-        if (Array.isArray(nestMessage)) {
-          errorData = nestMessage;  // Contains the specific field validation arrays
-        } else {
-          errorData = (resBody as any).error || null;
+                // If it's a validation error array, pass the details into the 'data' field
+                if (Array.isArray(nestMessage)) {
+                    errorData = nestMessage; // Contains the specific field validation arrays
+                } else {
+                    errorData = body.error || null;
+                }
+            }
+        } else if (exception instanceof Error) {
+            message = exception.message;
         }
-      }
-    } else if (exception instanceof Error) {
-      message = exception.message;
-    }
 
-    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error({ message: "Unhandled error while processing HTTP request", status, err: exception });
-    }
+        // 500 = HttpStatus.INTERNAL_SERVER_ERROR; any 5xx is a server fault worth logging.
+        if (status >= 500) {
+            this.logger.error({
+                message: "Unhandled error while processing HTTP request",
+                status,
+                err: exception,
+            });
+        }
 
-    response.status(status).json({
-      success: false,
-      message: message,
-      data: errorData,
-      timestamp: new Date().toISOString(),
-    });
-  }
+        response.status(status).json({
+            success: false,
+            message: message,
+            data: errorData,
+            timestamp: new Date().toISOString(),
+        });
+    }
 }

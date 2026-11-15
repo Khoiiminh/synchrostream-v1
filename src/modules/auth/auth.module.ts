@@ -13,14 +13,13 @@ import { JwtStrategy } from "./jwt.strategy.js";
             imports: [ConfigModule],
             inject: [ConfigService],
             useFactory: (config: ConfigService) => ({
-                secret: config.get<string>('JWT_SECRET'),
-                signOptions: { expiresIn: '1d' }
+                secret: config.get<string>("JWT_SECRET"),
+                signOptions: { expiresIn: "1d" },
             }),
         }),
     ],
     providers: [AuthService, JwtStrategy],
     controllers: [AuthController],
-    exports: [AuthService]
+    exports: [AuthService],
 })
-
 export class AuthModule {}

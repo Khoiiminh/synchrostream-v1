@@ -18,18 +18,14 @@ import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
         }),
     ],
 
-    controllers: [
-        WatchPartyController
-    ],
+    controllers: [WatchPartyController],
 
     providers: [
-        WatchPartyGateway, 
+        WatchPartyGateway,
         WatchPartyService,
         RoomLifecycleOutboxService,
     ],
 
-    exports: [
-        WatchPartyService
-    ],
+    exports: [WatchPartyService],
 })
 export class WatchPartyModule {}

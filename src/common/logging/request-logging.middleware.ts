@@ -12,9 +12,14 @@ const logger = new Logger("HTTP");
  * `x-request-id`), echoes it on the response, makes it part of every log line
  * written while handling the request, and writes one access-log line on finish.
  */
-export function requestLoggingMiddleware(req: Request, res: Response, next: NextFunction): void {
+export function requestLoggingMiddleware(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): void {
     const incoming = req.header(REQUEST_ID_HEADER);
-    const requestId = incoming && REQUEST_ID_PATTERN.test(incoming) ? incoming : randomUUID();
+    const requestId =
+        incoming && REQUEST_ID_PATTERN.test(incoming) ? incoming : randomUUID();
     res.setHeader(REQUEST_ID_HEADER, requestId);
 
     const startedAt = process.hrtime.bigint();

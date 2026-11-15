@@ -1,10 +1,19 @@
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import {
+    Injectable,
+    Logger,
+    OnModuleDestroy,
+    OnModuleInit,
+} from "@nestjs/common";
 import { LiveKitService } from "../livekit/livekit.service.js";
 import { PoolClient } from "pg";
 
-type RoomLifecycleStatus = "PROVISIONING" | "ACTIVE" | "TERMINATING" | "TERMINATED";
+type RoomLifecycleStatus =
+    | "PROVISIONING"
+    | "ACTIVE"
+    | "TERMINATING"
+    | "TERMINATED";
 
 interface OutboxEvent {
     event_id: string;
@@ -40,7 +49,9 @@ const COMPLETED_RETENTION_DAYS = 7;
 const SWEEP_INTERVAL_MS = 60_000;
 
 @Injectable()
-export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy {
+export class RoomLifecycleOutboxService
+    implements OnModuleInit, OnModuleDestroy
+{
     private readonly logger = new Logger(RoomLifecycleOutboxService.name);
     private timer?: NodeJS.Timeout;
     private sweepTimer?: NodeJS.Timeout;
@@ -62,7 +73,10 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
 
         // The sweeper guarantees convergence: no room or LiveKit session may stay
         // in a transitional state just because its event reached DEAD or was lost.
-        this.sweepTimer = setInterval(() => void this.sweep(), SWEEP_INTERVAL_MS);
+        this.sweepTimer = setInterval(
+            () => void this.sweep(),
+            SWEEP_INTERVAL_MS,
+        );
         this.sweepTimer.unref?.();
         void this.sweep();
     }
@@ -72,7 +86,10 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
         if (this.sweepTimer) clearInterval(this.sweepTimer);
     }
 
-    async enqueueRoomReconciliation(client: PoolClient, roomId: string): Promise<void> {
+    async enqueueRoomReconciliation(
+        client: PoolClient,
+        roomId: string,
+    ): Promise<void> {
         await client.query(
             `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
              VALUES ('ROOM_RECONCILE', $1)`,
@@ -92,7 +109,11 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
     async provisionRoomNow(roomId: string): Promise<void> {
         // Keep room creation responsive when dependencies are healthy; the durable
         // outbox event remains the recovery path if this attempt is interrupted.
-        await this.withTimeout(this.reconcileRoom(roomId), EVENT_TIMEOUT_MS, "Inline room provisioning");
+        await this.withTimeout(
+            this.reconcileRoom(roomId),
+            EVENT_TIMEOUT_MS,
+            "Inline room provisioning",
+        );
     }
 
     private async processBatch(): Promise<void> {
@@ -144,10 +165,18 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
 
     private async processEvent(event: OutboxEvent): Promise<void> {
         try {
-            const work = event.event_type === "ROOM_RECONCILE"
-                ? this.reconcileRoom(event.aggregate_id)
-                : this.liveKit.reconcileMediaSession(event.aggregate_id, event.created_at);
-            await this.withTimeout(work, EVENT_TIMEOUT_MS, `${event.event_type} ${event.event_id}`);
+            const work =
+                event.event_type === "ROOM_RECONCILE"
+                    ? this.reconcileRoom(event.aggregate_id)
+                    : this.liveKit.reconcileMediaSession(
+                          event.aggregate_id,
+                          event.created_at,
+                      );
+            await this.withTimeout(
+                work,
+                EVENT_TIMEOUT_MS,
+                `${event.event_type} ${event.event_id}`,
+            );
 
             await this.pg.query(
                 `UPDATE public.room_lifecycle_outbox
@@ -157,8 +186,12 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
                 [event.event_id, this.workerId],
             );
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            const delaySeconds = Math.min(300, 2 ** Math.min(event.attempts, 8));
+            const message =
+                error instanceof Error ? error.message : String(error);
+            const delaySeconds = Math.min(
+                300,
+                2 ** Math.min(event.attempts, 8),
+            );
             const deadLetter = event.attempts >= DEAD_LETTER_ATTEMPTS;
             await this.pg.query(
                 `UPDATE public.room_lifecycle_outbox
@@ -166,7 +199,13 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
                      next_attempt_at = NOW() + ($3 * INTERVAL '1 second'),
                      locked_by = NULL, locked_until = NULL, last_error = $4
                  WHERE event_id = $1 AND status = 'PROCESSING' AND locked_by = $2`,
-                [event.event_id, this.workerId, delaySeconds, message.slice(0, 4000), deadLetter],
+                [
+                    event.event_id,
+                    this.workerId,
+                    delaySeconds,
+                    message.slice(0, 4000),
+                    deadLetter,
+                ],
             );
             this.logger[deadLetter ? "error" : "warn"]({
                 message: deadLetter
@@ -224,7 +263,8 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
                     );
                     await this.enqueueRoomReconciliation(client, room.id);
                     this.logger.warn({
-                        message: "Room could not be provisioned in time and is being terminated",
+                        message:
+                            "Room could not be provisioned in time and is being terminated",
                         roomId: room.id,
                         timeoutMinutes: PROVISIONING_TIMEOUT_MINUTES,
                     });
@@ -280,13 +320,17 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
 
                 if (requeuedRooms.rowCount || requeuedSessions.rowCount) {
                     this.logger.warn({
-                        message: "Lifecycle sweeper re-enqueued unconverged aggregates",
+                        message:
+                            "Lifecycle sweeper re-enqueued unconverged aggregates",
                         rooms: requeuedRooms.rowCount,
                         mediaSessions: requeuedSessions.rowCount,
                     });
                 }
                 if (pruned.rowCount) {
-                    this.logger.debug({ message: "Pruned completed lifecycle events", count: pruned.rowCount });
+                    this.logger.debug({
+                        message: "Pruned completed lifecycle events",
+                        count: pruned.rowCount,
+                    });
                 }
             });
         } catch (error) {
@@ -326,7 +370,9 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
                 lastUpdated: Date.now(),
             });
             if (!projected) {
-                throw new Error("Redis room-code key is owned by a different nonterminated room generation.");
+                throw new Error(
+                    "Redis room-code key is owned by a different nonterminated room generation.",
+                );
             }
 
             await this.pg.withTransaction(async (client) => {
@@ -387,7 +433,9 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
         }
 
         if (!(await this.projectRoom(room, state))) {
-            throw new Error("Redis room-code key is owned by a different nonterminated room generation.");
+            throw new Error(
+                "Redis room-code key is owned by a different nonterminated room generation.",
+            );
         }
 
         // Media access follows membership: remove provider participants whose
@@ -413,14 +461,18 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
         room: RoomProjection,
         state: Record<string, string | number>,
     ): Promise<boolean> {
-        if (await this.redis.reconcileRoomState(room.room_code, state)) return true;
+        if (await this.redis.reconcileRoomState(room.room_code, state))
+            return true;
 
         const existing = await this.redis.getRoomState(room.room_code);
         // Same generation with a newer version: a later reconciliation already
         // projected fresher state, which is the desired outcome.
         if (!existing.roomId || existing.roomId === room.id) return true;
 
-        const holder = await this.pg.query<{ room_code: string; lifecycle_status: RoomLifecycleStatus }>(
+        const holder = await this.pg.query<{
+            room_code: string;
+            lifecycle_status: RoomLifecycleStatus;
+        }>(
             `SELECT room_code, lifecycle_status FROM public.rooms WHERE id = $1`,
             [existing.roomId],
         );
@@ -431,10 +483,15 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
             holderRow.lifecycle_status !== "TERMINATED";
         if (holderStillOwnsCode) return false;
 
-        const replaced = await this.redis.replaceStaleRoomState(room.room_code, existing.roomId, state);
+        const replaced = await this.redis.replaceStaleRoomState(
+            room.room_code,
+            existing.roomId,
+            state,
+        );
         if (replaced) {
             this.logger.warn({
-                message: "Replaced stale Redis room projection left by a terminated or legacy room",
+                message:
+                    "Replaced stale Redis room projection left by a terminated or legacy room",
                 roomCode: room.room_code,
                 staleRoomId: existing.roomId,
                 roomId: room.id,
@@ -445,11 +502,18 @@ export class RoomLifecycleOutboxService implements OnModuleInit, OnModuleDestroy
         return false;
     }
 
-    private async withTimeout<T>(work: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    private async withTimeout<T>(
+        work: Promise<T>,
+        timeoutMs: number,
+        label: string,
+    ): Promise<T> {
         let timeoutId: NodeJS.Timeout | undefined;
         const timeout = new Promise<never>((_, reject) => {
             timeoutId = setTimeout(
-                () => reject(new Error(`${label} timed out after ${timeoutMs} ms`)),
+                () =>
+                    reject(
+                        new Error(`${label} timed out after ${timeoutMs} ms`),
+                    ),
                 timeoutMs,
             );
         });

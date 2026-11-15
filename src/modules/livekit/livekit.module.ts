@@ -5,18 +5,9 @@ import { LiveKitController } from "./livekit.controller.js";
 import { MediaSessionModule } from "../media-session-sfu/media-session.module.js";
 
 @Module({
-    imports: [
-        LiveKitModule,
-        MediaSessionModule,
-    ],
-    controllers: [
-        LiveKitController,
-    ],
-    providers: [
-        LiveKitService,
-    ],
-    exports: [
-        LiveKitService,
-    ]
+    imports: [LiveKitModule, MediaSessionModule],
+    controllers: [LiveKitController],
+    providers: [LiveKitService],
+    exports: [LiveKitService],
 })
 export class LiveKitApplicationModule {}

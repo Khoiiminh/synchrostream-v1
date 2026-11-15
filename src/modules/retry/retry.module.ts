@@ -2,12 +2,8 @@ import { Module } from "@nestjs/common";
 import { RedisRetryHelper } from "./redis-retry.helper.js";
 
 @Module({
-    providers: [
-        RedisRetryHelper,
-    ],
+    providers: [RedisRetryHelper],
 
-    exports: [
-        RedisRetryHelper,
-    ]
+    exports: [RedisRetryHelper],
 })
 export class RetryModule {}
