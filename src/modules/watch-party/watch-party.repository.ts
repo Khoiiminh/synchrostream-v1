@@ -86,7 +86,8 @@ export class WatchPartyRepository {
         db: SqlExecutor = this.pg,
         room: {
             roomCode: string;
-            password: string;
+            /** bcrypt hash; the plaintext room password is never stored. */
+            passwordHash: string;
             ownerId: string;
             movieId: string;
             maxParticipants: number;
@@ -109,7 +110,7 @@ export class WatchPartyRepository {
 
         const result = await db.query<CreatedRoomRow>(insertRoomQuery, [
             room.roomCode,
-            room.password,
+            room.passwordHash,
             room.ownerId,
             room.movieId,
             room.maxParticipants,

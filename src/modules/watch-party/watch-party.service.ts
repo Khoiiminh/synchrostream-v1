@@ -19,6 +19,7 @@ import {
     Max,
     Min,
 } from "class-validator";
+import * as bcrypt from "bcrypt";
 import { randomInt } from "node:crypto";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
@@ -26,6 +27,8 @@ import { WatchPartyRepository } from "./watch-party.repository.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_CODE_GENERATION_ATTEMPTS = 5;
+/** Same cost factor as user passwords (auth and password-reset). */
+const ROOM_PASSWORD_BCRYPT_ROUNDS = 10;
 
 function generateRoomCode(): string {
     let code = "";
@@ -157,6 +160,12 @@ export class WatchPartyService {
 
         const requestedRoomCode = p.dto.roomCode?.trim().toUpperCase();
 
+        // Hash once, outside the transaction, so no lock is held while bcrypt runs.
+        const passwordHash = await bcrypt.hash(
+            p.dto.passwordPlain,
+            ROOM_PASSWORD_BCRYPT_ROUNDS,
+        );
+
         // An active room must be terminated through the gateway lifecycle first.
         // The advisory transaction lock serializes room creation for one owner,
         // including requests handled by different backend instances.
@@ -217,7 +226,7 @@ export class WatchPartyService {
                                 transactionClient,
                                 {
                                     roomCode: cleanRoomCode,
-                                    password: p.dto.passwordPlain,
+                                    passwordHash,
                                     ownerId: p.ownerId,
                                     movieId: p.dto.movieId,
                                     maxParticipants: p.dto.maxParticipants || 5,
@@ -417,7 +426,13 @@ export class WatchPartyService {
 
                     const isOwner = p.userId === room.owner_id;
 
-                    if (!isOwner && room.password !== p.dto.passwordPlain) {
+                    if (
+                        !isOwner &&
+                        !(await bcrypt.compare(
+                            p.dto.passwordPlain,
+                            room.password,
+                        ))
+                    ) {
                         this.logger.warn({
                             message:
                                 "Join room rejected: Invalid room credentials",
@@ -530,7 +545,6 @@ export class WatchPartyService {
                         createdMembership,
                         roomId: room.id,
                         roomCode: room.room_code,
-                        passwordPlain: room.password,
                         movieId: room.movie_id,
                         ownerId: room.owner_id,
                         maxParticipants: room.max_participants,

@@ -20,7 +20,7 @@ export interface CreatedRoomRow {
 }
 
 export interface LockedRoomRow extends CreatedRoomRow {
-    /** Required at room creation, so never NULL. */
+    /** bcrypt hash of the room password. Required at room creation, so never NULL. */
     password: string;
     lifecycle_status: RoomLifecycleStatus;
 }

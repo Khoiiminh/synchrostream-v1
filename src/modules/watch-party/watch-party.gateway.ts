@@ -1023,7 +1023,6 @@ export class WatchPartyGateway
                 actor = new WatchRoomActor(
                     session.roomId,
                     session.roomCode,
-                    session.passwordPlain,
                     session.ownerId,
                     session.movieId,
                     session.maxParticipants,

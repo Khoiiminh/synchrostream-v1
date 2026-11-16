@@ -25,9 +25,10 @@ export class PasswordResetRepository {
         );
     }
 
+    /** Matches only tokens that have not yet passed `reset_expires`. */
     async findUserIdByResetToken(token: string): Promise<string | undefined> {
         const result = await this.pg.query<{ id: string }>(
-            "SELECT id FROM users WHERE reset_token = $1",
+            "SELECT id FROM users WHERE reset_token = $1 AND reset_expires > NOW()",
             [token],
         );
         return result.rows[0]?.id;
