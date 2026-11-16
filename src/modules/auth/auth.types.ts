@@ -30,6 +30,11 @@ export interface UserProfileRow {
     role: string;
 }
 
+/** A user profile row plus the stored bcrypt hash, used only at login. */
+export interface UserCredentialsRow extends UserProfileRow {
+    password_hash: string;
+}
+
 /** Data WsJwtGuard attaches to `socket.data` after verifying the token. */
 export interface AuthenticatedSocketData {
     user?: AuthenticatedUser & { email: string };

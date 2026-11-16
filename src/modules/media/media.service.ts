@@ -1,28 +1,7 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-
-/** Row of the single-movie playback query. */
-interface PlayableMovieRow {
-    id: string;
-    title: string;
-    hls_url: string | null;
-    dash_url: string | null;
-    status: string;
-    is_cmaf_ready: boolean;
-    /** JSONB column; shape is set by the admin ingestion form. */
-    metadata: unknown;
-}
-
-/** Row of the catalog query (columns already aliased to camelCase). */
-export interface CatalogMovie {
-    movieId: string;
-    title: string;
-    status: string;
-    isCmafReady: boolean;
-    metadata: unknown;
-    createdAt: Date;
-}
+import { MediaRepository } from "./media.repository.js";
+import type { CatalogMovie, PlayableMovieRow } from "./media.types.js";
 
 /**
  * Metadata may arrive as a JSON object, a JSON string, or wrapped in a
@@ -42,7 +21,7 @@ export class MediaService {
     private readonly logger = new Logger(MediaService.name);
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly mediaRepository: MediaRepository,
         private readonly r2: CloudflareR2Provider,
     ) {}
 
@@ -56,17 +35,9 @@ export class MediaService {
             movieId,
         });
 
-        const query = `
-            SELECT id, title, hls_url, dash_url, status, is_cmaf_ready, metadata
-            FROM movies 
-            WHERE id = $1 AND status = 'AVAILABLE'::processing_status;`;
-
         let movie: PlayableMovieRow | undefined;
         try {
-            const result = await this.pg.query<PlayableMovieRow>(query, [
-                movieId,
-            ]);
-            movie = result.rows[0];
+            movie = await this.mediaRepository.findPlayableMovie(movieId);
         } catch (dbError) {
             this.logger.error({
                 message:
@@ -123,21 +94,8 @@ export class MediaService {
     async getAvailableCatalog(): Promise<CatalogMovie[]> {
         this.logger.debug({ message: "Fetching available movie catalog" });
 
-        const queryText = `
-            SELECT
-                id AS "movieId",
-                title,
-                status,
-                is_cmaf_ready AS "isCmafReady",
-                metadata,
-                created_at AS "createdAt"
-            FROM public.movies
-            WHERE status = 'AVAILABLE' AND is_cmaf_ready = true
-            ORDER BY title ASC
-        `;
-
-        const records = await this.pg.query<CatalogMovie>(queryText);
-        return records.rows.map((movie) => {
+        const records = await this.mediaRepository.findAvailableCatalog();
+        return records.map((movie) => {
             let parsedMetadata: unknown = {};
 
             if (movie.metadata) {

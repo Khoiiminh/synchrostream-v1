@@ -13,9 +13,9 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
 import { MediaSessionService } from "./media-session.service.js";
-import { CreateMediaSessionDto } from "./dto/media-session.dto.js";
+import { CreateMediaSessionDto } from "./media-session.dto.js";
 import { MediaOrchestrationService } from "./media-orchestration.service.js";
 import type { AuthenticatedRequest } from "../auth/auth.types.js";
 

@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import {
     ConflictException,
     ForbiddenException,
@@ -12,14 +11,14 @@ import {
     LIVEKIT_CONFIG,
     type LiveKitConfig,
 } from "@/shared/infrastructure/livekit/livekit.types.js";
-import { LiveKitConnectionDto } from "./dto/livekit-connection.dto.js";
+import { LiveKitConnectionDto } from "./livekit.dto.js";
 import { LiveKitTokenService } from "@/shared/infrastructure/livekit/livekit.token.service.js";
 import { LiveKitInfrastructureService } from "@/shared/infrastructure/livekit/livekit.infrastructure.service.js";
 import {
     MediaSession,
-    MediaSessionRow,
     mapMediaSessionRow,
 } from "../media-session-sfu/media-session.types.js";
+import { LiveKitRepository } from "./livekit.repository.js";
 
 /**
  * Service responsible for managing LiveKit media sessions, coordinating room infrastructure
@@ -30,7 +29,7 @@ export class LiveKitService {
     private readonly logger = new Logger(LiveKitService.name);
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly liveKitRepository: LiveKitRepository,
         private readonly mediaSessionService: MediaSessionService,
         private readonly liveKitTokenService: LiveKitTokenService,
         private readonly liveKitInfrasService: LiveKitInfrastructureService,
@@ -233,16 +232,9 @@ export class LiveKitService {
         roomId: string,
         userId: string,
     ): Promise<MediaSession> {
-        const membership = await this.pg.query(
-            `SELECT rp.id
-             FROM public.room_participants rp
-             INNER JOIN public.rooms r ON r.id = rp.room_id
-             WHERE rp.room_id = $1 AND rp.user_id = $2
-               AND rp.is_active = true AND r.lifecycle_status = 'ACTIVE'
-             LIMIT 1`,
-            [roomId, userId],
-        );
-        if (!membership.rows[0]) {
+        const membershipId =
+            await this.liveKitRepository.findActiveMembershipId(roomId, userId);
+        if (!membershipId) {
             throw new ForbiddenException(
                 "Only active members of an active room can start its media session.",
             );
@@ -323,11 +315,10 @@ export class LiveKitService {
         if (session.status === "ACTIVE") return;
         if (session.status === "CREATED") {
             // A CREATED session for a room that is no longer ACTIVE can never start.
-            const room = await this.pg.query(
-                `SELECT 1 FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE'`,
-                [session.roomId],
+            const roomIsActive = await this.liveKitRepository.isRoomActive(
+                session.roomId,
             );
-            if (!room.rows[0]) {
+            if (!roomIsActive) {
                 await this.endMediaSessionById(mediaSessionId);
             }
             return;
@@ -499,33 +490,18 @@ export class LiveKitService {
             );
         }
 
-        const participantQuery = `
-            SELECT
-                rp.id AS participant_id,
-                rp.user_id,
-                rp.room_id
-            FROM public.room_participants rp
-            INNER JOIN public.rooms r ON r.id = rp.room_id
-            WHERE rp.room_id = $1
-            AND rp.user_id = $2
-            AND rp.is_active = true
-            AND r.lifecycle_status = 'ACTIVE'
-            LIMIT 1
-        `;
+        const participant = await this.liveKitRepository.findActiveParticipant(
+            session.roomId,
+            userId,
+        );
 
-        const participant = await this.pg.query<{
-            participant_id: string;
-            user_id: string;
-            room_id: string;
-        }>(participantQuery, [session.roomId, userId]);
-
-        if (!participant || participant.rows.length < 1) {
+        if (!participant) {
             throw new NotFoundException(
                 "The authenticated user is not a participant of the MediaSession room.",
             );
         }
 
-        const participantId = participant.rows[0].participant_id;
+        const participantId = participant.participant_id;
 
         const participantToken =
             await this.liveKitTokenService.createParticipantToken({
@@ -613,22 +589,11 @@ export class LiveKitService {
             );
         }
 
-        const roomQuery = `
-            SELECT
-                id,
-                max_participants
-            FROM public.rooms
-            WHERE id = $1
-            AND lifecycle_status = 'ACTIVE'
-            LIMIT 1
-        `;
+        const room = await this.liveKitRepository.findActiveRoom(
+            session.roomId,
+        );
 
-        const room = await this.pg.query<{
-            id: string;
-            max_participants: number;
-        }>(roomQuery, [session.roomId]);
-
-        if (!room || room.rows.length < 1) {
+        if (!room) {
             throw new NotFoundException(
                 "The MediaSession watch room does not exist or is inactive.",
             );
@@ -636,13 +601,13 @@ export class LiveKitService {
 
         const startingSession = await this.startLiveKitSession(
             mediaSessionId,
-            room.rows[0].id,
+            room.id,
         );
 
         try {
             await this.liveKitInfrasService.createRoom(
                 startingSession.id,
-                room.rows[0].max_participants,
+                room.max_participants,
             );
 
             return await this.activateLiveKitSession(
@@ -680,11 +645,9 @@ export class LiveKitService {
     }
 
     private async assertRoomActive(roomId: string): Promise<void> {
-        const result = await this.pg.query(
-            `SELECT id FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE' LIMIT 1`,
-            [roomId],
-        );
-        if (!result.rows[0]) {
+        const activeRoomId =
+            await this.liveKitRepository.findActiveRoomId(roomId);
+        if (!activeRoomId) {
             throw new ConflictException(
                 "The watch room is no longer accepting media connections.",
             );
@@ -695,38 +658,37 @@ export class LiveKitService {
         mediaSessionId: string,
         roomId: string,
     ): Promise<MediaSession> {
-        const result = await this.pg.withTransaction(async (client) => {
-            const room = await client.query(
-                `SELECT id FROM public.rooms
-                 WHERE id = $1 AND lifecycle_status = 'ACTIVE'
-                 FOR UPDATE`,
-                [roomId],
-            );
-            if (!room.rows[0]) {
-                throw new ConflictException(
-                    "Cannot start LiveKit for a room that is no longer ACTIVE.",
+        const result = await this.liveKitRepository.withTransaction(
+            async (tx) => {
+                const roomLocked = await this.liveKitRepository.lockActiveRoom(
+                    tx,
+                    roomId,
                 );
-            }
-            const updated = await client.query<MediaSessionRow>(
-                `UPDATE public.media_sessions SET status = 'STARTING'
-                 WHERE id = $1 AND room_id = $2 AND status = 'CREATED'
-                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
-                [mediaSessionId, roomId],
-            );
-            if (!updated.rows[0]) {
-                throw new ConflictException(
-                    "MediaSession state changed before LiveKit startup.",
+                if (!roomLocked) {
+                    throw new ConflictException(
+                        "Cannot start LiveKit for a room that is no longer ACTIVE.",
+                    );
+                }
+                const updated =
+                    await this.liveKitRepository.markSessionStarting(
+                        tx,
+                        mediaSessionId,
+                        roomId,
+                    );
+                if (!updated) {
+                    throw new ConflictException(
+                        "MediaSession state changed before LiveKit startup.",
+                    );
+                }
+                // Recovery for a crashed startup is only needed after the 30 s startup
+                // window; claiming it earlier just fails and burns retry attempts.
+                await this.liveKitRepository.enqueueDelayedSessionReconcile(
+                    tx,
+                    mediaSessionId,
                 );
-            }
-            // Recovery for a crashed startup is only needed after the 30 s startup
-            // window; claiming it earlier just fails and burns retry attempts.
-            await client.query(
-                `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id, next_attempt_at)
-                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1, NOW() + INTERVAL '35 seconds')`,
-                [mediaSessionId],
-            );
-            return updated.rows[0];
-        });
+                return updated;
+            },
+        );
         return mapMediaSessionRow(result);
     }
 
@@ -734,58 +696,54 @@ export class LiveKitService {
         mediaSessionId: string,
         roomId: string,
     ): Promise<MediaSession> {
-        const result = await this.pg.withTransaction(async (client) => {
-            const room = await client.query(
-                `SELECT id FROM public.rooms
-                 WHERE id = $1 AND lifecycle_status = 'ACTIVE'
-                 FOR UPDATE`,
-                [roomId],
-            );
-            if (!room.rows[0]) {
-                throw new ConflictException(
-                    "The watch room began termination before LiveKit activation.",
+        const result = await this.liveKitRepository.withTransaction(
+            async (tx) => {
+                const roomLocked = await this.liveKitRepository.lockActiveRoom(
+                    tx,
+                    roomId,
                 );
-            }
-            const updated = await client.query<MediaSessionRow>(
-                `UPDATE public.media_sessions
-                 SET status = 'ACTIVE', started_at = COALESCE(started_at, NOW())
-                 WHERE id = $1 AND room_id = $2 AND status = 'STARTING'
-                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
-                [mediaSessionId, roomId],
-            );
-            if (!updated.rows[0]) {
-                throw new ConflictException(
-                    "MediaSession cannot activate from its current state.",
+                if (!roomLocked) {
+                    throw new ConflictException(
+                        "The watch room began termination before LiveKit activation.",
+                    );
+                }
+                const updated = await this.liveKitRepository.markSessionActive(
+                    tx,
+                    mediaSessionId,
+                    roomId,
                 );
-            }
-            return updated.rows[0];
-        });
+                if (!updated) {
+                    throw new ConflictException(
+                        "MediaSession cannot activate from its current state.",
+                    );
+                }
+                return updated;
+            },
+        );
         return mapMediaSessionRow(result);
     }
 
     private async markLiveKitSessionEnding(
         mediaSessionId: string,
     ): Promise<MediaSession> {
-        const result = await this.pg.withTransaction(async (client) => {
-            const updated = await client.query<MediaSessionRow>(
-                `UPDATE public.media_sessions
-                 SET status = 'ENDING'
-                 WHERE id = $1 AND status IN ('CREATED', 'STARTING', 'ACTIVE')
-                 RETURNING id, room_id, status, assigned_sfu_node_id, created_at, started_at, ended_at`,
-                [mediaSessionId],
-            );
-            if (!updated.rows[0]) {
-                throw new ConflictException(
-                    "MediaSession state changed before LiveKit termination.",
+        const result = await this.liveKitRepository.withTransaction(
+            async (tx) => {
+                const updated = await this.liveKitRepository.markSessionEnding(
+                    tx,
+                    mediaSessionId,
                 );
-            }
-            await client.query(
-                `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
-                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1)`,
-                [mediaSessionId],
-            );
-            return updated.rows[0];
-        });
+                if (!updated) {
+                    throw new ConflictException(
+                        "MediaSession state changed before LiveKit termination.",
+                    );
+                }
+                await this.liveKitRepository.enqueueSessionReconcile(
+                    tx,
+                    mediaSessionId,
+                );
+                return updated;
+            },
+        );
         return mapMediaSessionRow(result);
     }
 }

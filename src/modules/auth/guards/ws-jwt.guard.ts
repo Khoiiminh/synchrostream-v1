@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import {
     CanActivate,
     ExecutionContext,
@@ -8,11 +7,8 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { WsException } from "@nestjs/websockets";
-import type {
-    AuthenticatedSocket,
-    JwtPayload,
-    UserProfileRow,
-} from "./auth.types.js";
+import { AuthRepository } from "../auth.repository.js";
+import type { AuthenticatedSocket, JwtPayload } from "../auth.types.js";
 
 @Injectable()
 export class WsJwtGuard implements CanActivate {
@@ -20,7 +16,7 @@ export class WsJwtGuard implements CanActivate {
 
     constructor(
         private readonly jwtService: JwtService,
-        private readonly pg: PostgresProvider,
+        private readonly authRepository: AuthRepository,
         private readonly configService: ConfigService,
     ) {}
 
@@ -49,12 +45,11 @@ export class WsJwtGuard implements CanActivate {
                 secret: this.configService.get<string>("JWT_SECRET"),
             });
 
-            const user = await this.pg.query<UserProfileRow>(
-                "SELECT id, username, email, role FROM users WHERE id = $1",
-                [payload.sub || payload.id],
+            const user = await this.authRepository.findProfileById(
+                payload.sub || payload.id || "",
             );
 
-            if (!user || user.rows.length < 1) {
+            if (!user) {
                 throw new WsException(
                     "User profile matching token signature not found.",
                 );
@@ -63,10 +58,10 @@ export class WsJwtGuard implements CanActivate {
             // Append authenticated state context onto the active socket instance
             client.data = {
                 user: {
-                    id: user.rows[0].id,
-                    username: user.rows[0].username,
-                    email: user.rows[0].email,
-                    role: user.rows[0].role,
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    role: user.role,
                 },
             };
 

@@ -2,11 +2,12 @@ import { InfrastructureModule } from "@/shared/infrastructure/infrastructure.mod
 import { Module } from "@nestjs/common";
 import { MediaController } from "./media.controller.js";
 import { MediaService } from "./media.service.js";
+import { MediaRepository } from "./media.repository.js";
 
 @Module({
     imports: [InfrastructureModule],
     controllers: [MediaController],
     exports: [MediaService],
-    providers: [MediaService],
+    providers: [MediaService, MediaRepository],
 })
 export class MediaModule {}

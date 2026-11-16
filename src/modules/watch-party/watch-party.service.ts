@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import {
     BadRequestException,
     ConflictException,
@@ -20,23 +19,10 @@ import {
     Max,
     Min,
 } from "class-validator";
-import type { PoolClient } from "pg";
 import { randomInt } from "node:crypto";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
-import type {
-    ActiveMembershipRow,
-    CountRow,
-    CreatedRoomRow,
-    InactiveRoomRow,
-    LockedRoomRow,
-    MemberUserRow,
-    ParticipantRow,
-    RoomDetails,
-    RoomProjectionRow,
-    RoomStatusRow,
-    StateVersionRow,
-    UserSessionRow,
-} from "./watch-party.rows.js";
+import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
+import { WatchPartyRepository } from "./watch-party.repository.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_CODE_GENERATION_ATTEMPTS = 5;
@@ -123,7 +109,7 @@ export class WatchPartyService {
     private readonly logger = new Logger(WatchPartyService.name);
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly repo: WatchPartyRepository,
         private readonly lifecycleOutbox: RoomLifecycleOutboxService,
     ) {}
 
@@ -181,52 +167,37 @@ export class WatchPartyService {
             const cleanRoomCode = requestedRoomCode ?? generateRoomCode();
             try {
                 // Check ownership
-                const room = await this.pg.withTransaction(
+                const room = await this.repo.withTransaction(
                     async (transactionClient) => {
-                        await transactionClient.query(
-                            `SELECT pg_advisory_xact_lock(hashtext($1))`,
-                            [`watch-room-owner:${p.ownerId}`],
+                        await this.repo.acquireOwnerRoomCreationLock(
+                            transactionClient,
+                            p.ownerId,
                         );
 
                         // A TERMINATING room can never become available again, so it does
                         // not block a new room; it keeps only its code reserved while the
                         // outbox finishes provider and projection cleanup.
-                        const existingRoom = await transactionClient.query<{
-                            id: string;
-                            room_code: string;
-                        }>(
-                            `
-                    SELECT id, room_code
-                    FROM public.rooms
-                    WHERE owner_id = $1 AND lifecycle_status IN ('PROVISIONING', 'ACTIVE')
-                    LIMIT 1`,
-                            [p.ownerId],
+                        const existingRoom = await this.repo.findOwnedLiveRoom(
+                            transactionClient,
+                            p.ownerId,
                         );
 
-                        if (existingRoom.rows.length > 0) {
+                        if (existingRoom) {
                             throw new ConflictException({
-                                message: `You already have an active room (${existingRoom.rows[0].room_code}). Close it before creating another room.`,
+                                message: `You already have an active room (${existingRoom.room_code}). Close it before creating another room.`,
                                 error: {
                                     code: "ACTIVE_OWNER_ROOM",
-                                    roomId: existingRoom.rows[0].id,
-                                    roomCode: existingRoom.rows[0].room_code,
+                                    roomId: existingRoom.id,
+                                    roomCode: existingRoom.room_code,
                                     isOwner: true,
                                 },
                             });
                         }
 
                         // Clear memberships only after their owning room has fully terminated.
-                        await transactionClient.query(
-                            `
-                    UPDATE public.room_participants AS rp
-                    SET is_active = false,
-                        left_at = COALESCE(rp.left_at, NOW())
-                    FROM public.rooms AS r
-                    WHERE rp.room_id = r.id
-                        AND rp.user_id = $1
-                        AND rp.is_active = true
-                        AND r.lifecycle_status = 'TERMINATED'`,
-                            [p.ownerId],
+                        await this.repo.deactivateMembershipsInTerminatedRooms(
+                            transactionClient,
+                            p.ownerId,
                         );
 
                         // Check for membership in someone else's room.
@@ -241,51 +212,27 @@ export class WatchPartyService {
                         // After verifying and cleaning up this user stale memberships
                         // (owner-ship and participant-ship)
                         // Now this time is for create the room
-                        const insertRoomQuery = `
-                    INSERT INTO public.rooms (
-                        room_code,
-                        "password",
-                        owner_id,
-                        movie_id,
-                        max_participants,
-                        is_active,
-                        lifecycle_status,
-                        state_version
-                    )
-                    VALUES ($1, $2, $3, $4, $5, false, 'PROVISIONING', 1)
-                    RETURNING
-                        id, room_code, owner_id, movie_id, max_participants, state_version`;
-
-                        const result =
-                            await transactionClient.query<CreatedRoomRow>(
-                                insertRoomQuery,
-                                [
-                                    cleanRoomCode,
-                                    p.dto.passwordPlain,
-                                    p.ownerId,
-                                    p.dto.movieId,
-                                    p.dto.maxParticipants || 5,
-                                ],
+                        const createdRoom =
+                            await this.repo.insertProvisioningRoom(
+                                transactionClient,
+                                {
+                                    roomCode: cleanRoomCode,
+                                    password: p.dto.passwordPlain,
+                                    ownerId: p.ownerId,
+                                    movieId: p.dto.movieId,
+                                    maxParticipants: p.dto.maxParticipants || 5,
+                                },
                             );
-
-                        const createdRoom = result.rows[0];
 
                         await this.lifecycleOutbox.enqueueRoomReconciliation(
                             transactionClient,
                             createdRoom.id,
                         );
 
-                        const createOwnerParticipantQuery = `
-                    INSERT INTO public.room_participants (
-                        room_id,
-                        user_id, 
-                        has_control_privilege
-                    )
-                    VALUES ($1, $2, true)`;
-
-                        await transactionClient.query(
-                            createOwnerParticipantQuery,
-                            [createdRoom.id, p.ownerId],
+                        await this.repo.insertOwnerParticipant(
+                            transactionClient,
+                            createdRoom.id,
+                            p.ownerId,
                         );
 
                         return createdRoom;
@@ -333,7 +280,7 @@ export class WatchPartyService {
                     // A concurrent join committed first; report which room, so the
                     // client can offer to switch.
                     const currentRoom = await this.findCurrentRoom(
-                        this.pg,
+                        undefined,
                         p.ownerId,
                     );
                     throw currentRoom
@@ -421,35 +368,18 @@ export class WatchPartyService {
         }
 
         try {
-            const result = await this.pg.withTransaction(
+            const result = await this.repo.withTransaction(
                 async (transactionClient) => {
                     /*
                      * Lock the room row so two concurrent joins cannot both
                      * observe the same available capacity.
                      */
-                    const roomResult =
-                        await transactionClient.query<LockedRoomRow>(
-                            `
-                        SELECT
-                            id,
-                            room_code,
-                            "password",
-                            owner_id,
-                            movie_id,
-                            max_participants,
-                            lifecycle_status,
-                            state_version
-                        FROM public.rooms
-                        WHERE UPPER(TRIM(room_code)) = $1
-                        AND lifecycle_status IN ('PROVISIONING', 'ACTIVE')
-                        FOR UPDATE
-                        `,
-                            [cleanCode],
-                        );
+                    const lockedRoom = await this.repo.lockLiveRoomByCode(
+                        transactionClient,
+                        cleanCode,
+                    );
 
-                    if (
-                        roomResult.rows[0]?.lifecycle_status === "PROVISIONING"
-                    ) {
+                    if (lockedRoom?.lifecycle_status === "PROVISIONING") {
                         // Committed but not yet projected/activated by the outbox.
                         // 503 tells the gateway client to retry shortly.
                         throw new ServiceUnavailableException(
@@ -457,7 +387,7 @@ export class WatchPartyService {
                         );
                     }
 
-                    if (roomResult.rows.length === 0) {
+                    if (!lockedRoom) {
                         this.logger.warn({
                             message:
                                 "Join room rejected: Active room not found",
@@ -470,7 +400,7 @@ export class WatchPartyService {
                         );
                     }
 
-                    const room = roomResult.rows[0];
+                    const room = lockedRoom;
 
                     /*
                      * First determine whether this user already has an
@@ -478,25 +408,12 @@ export class WatchPartyService {
                      *
                      * If yes, that record is reused.
                      */
-                    const existingParticipantResult =
-                        await transactionClient.query<ParticipantRow>(
-                            `
-                        SELECT
-                            id,
-                            room_id,
-                            user_id,
-                            has_control_privilege
-                        FROM public.room_participants
-                        WHERE room_id = $1
-                        AND user_id = $2
-                        AND is_active = true
-                        LIMIT 1
-                        `,
-                            [room.id, p.userId],
-                        );
-
                     const existingParticipant =
-                        existingParticipantResult.rows[0];
+                        await this.repo.findActiveParticipant(
+                            transactionClient,
+                            room.id,
+                            p.userId,
+                        );
 
                     const isOwner = p.userId === room.owner_id;
 
@@ -541,18 +458,11 @@ export class WatchPartyService {
                          * An old inactive row may exist, but that is historical.
                          * This join receives a NEW participant record.
                          */
-                        const countResult =
-                            await transactionClient.query<CountRow>(
-                                `
-                            SELECT COUNT(*)::int AS count
-                            FROM public.room_participants
-                            WHERE room_id = $1
-                            AND is_active = true
-                            `,
-                                [room.id],
+                        const participantCount =
+                            await this.repo.countActiveParticipants(
+                                transactionClient,
+                                room.id,
                             );
-
-                        const participantCount = countResult.rows[0].count;
 
                         if (participantCount >= room.max_participants) {
                             throw new BadRequestException(
@@ -576,24 +486,11 @@ export class WatchPartyService {
                             throw this.membershipElsewhereConflict(currentRoom);
                         }
 
-                        const participantResult =
-                            await transactionClient.query<ParticipantRow>(
-                                `
-                            INSERT INTO public.room_participants (
-                                room_id,
-                                user_id
-                            )
-                            VALUES ($1, $2)
-                            RETURNING
-                                id,
-                                room_id,
-                                user_id,
-                                has_control_privilege
-                            `,
-                                [room.id, p.userId],
-                            );
-
-                        participant = participantResult.rows[0];
+                        participant = await this.repo.insertParticipant(
+                            transactionClient,
+                            room.id,
+                            p.userId,
+                        );
                         createdMembership = true;
 
                         this.logger.log({
@@ -609,30 +506,19 @@ export class WatchPartyService {
                      * Get authoritative active occupancy after either
                      * reuse or insertion.
                      */
-                    const finalCountResult =
-                        await transactionClient.query<CountRow>(
-                            `
-                        SELECT COUNT(*)::int AS count
-                        FROM public.room_participants
-                        WHERE room_id = $1
-                        AND is_active = true
-                        `,
-                            [room.id],
+                    const participantCount =
+                        await this.repo.countActiveParticipants(
+                            transactionClient,
+                            room.id,
                         );
-
-                    const participantCount = finalCountResult.rows[0].count;
 
                     let stateVersion = room.state_version;
                     if (createdMembership) {
-                        const versionResult =
-                            await transactionClient.query<StateVersionRow>(
-                                `UPDATE public.rooms
-                             SET state_version = state_version + 1
-                             WHERE id = $1 AND lifecycle_status = 'ACTIVE'
-                             RETURNING state_version`,
-                                [room.id],
+                        stateVersion =
+                            await this.repo.incrementActiveRoomStateVersion(
+                                transactionClient,
+                                room.id,
                             );
-                        stateVersion = versionResult.rows[0].state_version;
                         await this.lifecycleOutbox.enqueueRoomReconciliation(
                             transactionClient,
                             room.id,
@@ -674,7 +560,7 @@ export class WatchPartyService {
                 });
 
                 const currentRoom = await this.findCurrentRoom(
-                    this.pg,
+                    undefined,
                     p.userId,
                 );
                 throw currentRoom
@@ -700,54 +586,40 @@ export class WatchPartyService {
         participantCount: number;
     } | null> {
         try {
-            const result = await this.pg.withTransaction(
+            const result = await this.repo.withTransaction(
                 async (transactionClient) => {
-                    const membershipLookup = await transactionClient.query<{
-                        room_id: string;
-                    }>(
-                        `SELECT room_id FROM public.room_participants WHERE id = $1 LIMIT 1`,
-                        [participantId],
-                    );
-                    if (!membershipLookup.rows[0]) return null;
+                    const membershipRoomId =
+                        await this.repo.findParticipantRoomId(
+                            transactionClient,
+                            participantId,
+                        );
+                    if (!membershipRoomId) return null;
 
                     // All membership exits lock the room first, matching owner termination.
-                    const roomResult =
-                        await transactionClient.query<RoomStatusRow>(
-                            `SELECT id, room_code, lifecycle_status
-                         FROM public.rooms WHERE id = $1 FOR UPDATE`,
-                            [membershipLookup.rows[0].room_id],
-                        );
-                    const room = roomResult.rows[0];
+                    const room = await this.repo.lockRoomStatus(
+                        transactionClient,
+                        membershipRoomId,
+                    );
                     if (!room || room.lifecycle_status !== "ACTIVE") {
                         return null;
                     }
 
-                    const deactivated = await transactionClient.query(
-                        `
-                        UPDATE public.room_participants
-                        SET is_active = false,
-                            left_at = NOW()
-                        WHERE id = $1 AND room_id = $2
-                        AND is_active = true
-                        RETURNING id
-                        `,
-                        [participantId, room.id],
+                    const deactivated = await this.repo.deactivateParticipant(
+                        transactionClient,
+                        participantId,
+                        room.id,
                     );
-                    if (!deactivated.rowCount) return null;
+                    if (!deactivated) return null;
 
-                    const countResult = await transactionClient.query<CountRow>(
-                        `
-                        SELECT COUNT(*)::int AS count
-                        FROM public.room_participants
-                        WHERE room_id = $1
-                        AND is_active = true
-                        `,
-                        [room.id],
-                    );
+                    const participantCount =
+                        await this.repo.countActiveParticipants(
+                            transactionClient,
+                            room.id,
+                        );
 
-                    await transactionClient.query(
-                        `UPDATE public.rooms SET state_version = state_version + 1 WHERE id = $1`,
-                        [room.id],
+                    await this.repo.incrementRoomStateVersion(
+                        transactionClient,
+                        room.id,
                     );
                     await this.lifecycleOutbox.enqueueRoomReconciliation(
                         transactionClient,
@@ -757,7 +629,7 @@ export class WatchPartyService {
                     return {
                         roomId: room.id,
                         roomCode: room.room_code,
-                        participantCount: countResult.rows[0].count,
+                        participantCount,
                     };
                 },
             );
@@ -825,48 +697,23 @@ export class WatchPartyService {
         membersToKick?: string[];
         participantCount?: number;
     }> {
-        const result = await this.pg.withTransaction(
+        const result = await this.repo.withTransaction(
             async (transactionClient) => {
-                const userSessionResult =
-                    await transactionClient.query<UserSessionRow>(
-                        `
-                    SELECT
-                        r.id AS room_id,
-                        r.room_code,
-                        r.owner_id,
-                        rp.id AS participant_id
-                    FROM public.rooms r
-                    LEFT JOIN public.room_participants rp
-                        ON r.id = rp.room_id
-                        AND rp.user_id = $1
-                        AND rp.is_active = true
-                    WHERE (
-                        r.owner_id = $1
-                        OR rp.user_id = $1
-                    )
-                    AND r.lifecycle_status IN ('PROVISIONING', 'ACTIVE')
-                    AND ($2::uuid IS NULL OR r.id = $2::uuid)
-                    FOR UPDATE OF r
-                    `,
-                        [userId, roomId ?? null],
-                    );
+                const session = await this.repo.lockUserLiveSession(
+                    transactionClient,
+                    userId,
+                    roomId,
+                );
 
-                if (userSessionResult.rows.length === 0) {
+                if (!session) {
                     // An earlier cleanup attempt may have deactivated the room
                     // in PostgreSQL but failed while deleting its Redis projection.
                     // Return the exact inactive owner room so a retry can finish cleanup
                     if (roomId) {
-                        const inactiveRoomResult =
-                            await transactionClient.query<InactiveRoomRow>(
-                                `
-                            SELECT id AS room_id, room_code, owner_id, lifecycle_status
-                            FROM public.rooms
-                            WHERE id = $1
-                            LIMIT 1`,
-                                [roomId],
-                            );
-
-                        const inactiveRoom = inactiveRoomResult.rows[0];
+                        const inactiveRoom = await this.repo.findRoomLifecycle(
+                            transactionClient,
+                            roomId,
+                        );
 
                         if (
                             inactiveRoom &&
@@ -889,8 +736,6 @@ export class WatchPartyService {
                     };
                 }
 
-                const session = userSessionResult.rows[0];
-
                 const { room_id, room_code, owner_id } = session;
 
                 if (owner_id === userId) {
@@ -901,31 +746,15 @@ export class WatchPartyService {
                         ownerId: userId,
                     });
 
-                    const membersResult =
-                        await transactionClient.query<MemberUserRow>(
-                            `
-                        SELECT user_id
-                        FROM public.room_participants
-                        WHERE room_id = $1
-                        AND is_active = true
-                        `,
-                            [room_id],
+                    const membersToKick =
+                        await this.repo.listActiveMemberUserIds(
+                            transactionClient,
+                            room_id,
                         );
 
-                    const membersToKick = membersResult.rows.map(
-                        (member) => member.user_id,
-                    );
-
-                    await transactionClient.query(
-                        `
-                        UPDATE public.rooms
-                        SET is_active = false,
-                            lifecycle_status = 'TERMINATING',
-                            state_version = state_version + 1
-                        WHERE id = $1
-                          AND lifecycle_status IN ('PROVISIONING', 'ACTIVE')
-                        `,
-                        [room_id],
+                    await this.repo.markRoomTerminating(
+                        transactionClient,
+                        room_id,
                     );
 
                     await this.lifecycleOutbox.enqueueRoomReconciliation(
@@ -933,15 +762,9 @@ export class WatchPartyService {
                         room_id,
                     );
 
-                    await transactionClient.query(
-                        `
-                        UPDATE public.room_participants
-                        SET is_active = false,
-                            left_at = NOW()
-                        WHERE room_id = $1
-                        AND is_active = true
-                        `,
-                        [room_id],
+                    await this.repo.deactivateAllRoomParticipants(
+                        transactionClient,
+                        room_id,
                     );
 
                     return {
@@ -960,31 +783,21 @@ export class WatchPartyService {
                     userId,
                 });
 
-                await transactionClient.query(
-                    `
-                    UPDATE public.room_participants
-                    SET is_active = false,
-                        left_at = NOW()
-                    WHERE room_id = $1
-                    AND user_id = $2
-                    AND is_active = true
-                    `,
-                    [room_id, userId],
+                await this.repo.deactivateUserMembership(
+                    transactionClient,
+                    room_id,
+                    userId,
                 );
 
-                const countResult = await transactionClient.query<CountRow>(
-                    `
-                    SELECT COUNT(*)::int AS count
-                    FROM public.room_participants
-                    WHERE room_id = $1
-                    AND is_active = true
-                    `,
-                    [room_id],
-                );
+                const participantCount =
+                    await this.repo.countActiveParticipants(
+                        transactionClient,
+                        room_id,
+                    );
 
-                await transactionClient.query(
-                    `UPDATE public.rooms SET state_version = state_version + 1 WHERE id = $1`,
-                    [room_id],
+                await this.repo.incrementRoomStateVersion(
+                    transactionClient,
+                    room_id,
                 );
                 await this.lifecycleOutbox.enqueueRoomReconciliation(
                     transactionClient,
@@ -995,7 +808,7 @@ export class WatchPartyService {
                     status: "PARTICIPANT_EVICTED",
                     roomCode: room_code,
                     roomId: room_id,
-                    participantCount: countResult.rows[0].count,
+                    participantCount,
                 };
             },
         );
@@ -1033,26 +846,12 @@ export class WatchPartyService {
      * @throws {Error} Throws if the database query execution fails unexpectedly.
      */
     async getRoomDetailsByCode(roomCode: string) {
-        const query = `
-            SELECT 
-                id AS "roomId",
-                room_code AS "roomCode",
-                owner_id AS "ownerId",
-                movie_id AS "movieId",
-                max_participants AS "maxParticipants",
-                (lifecycle_status = 'ACTIVE') AS "isActive",
-                lifecycle_status AS "lifecycleStatus"
-            FROM public.rooms
-            WHERE UPPER(TRIM(room_code)) = $1
-            AND lifecycle_status = 'ACTIVE'
-        `;
-
         try {
             const cleanCode = roomCode.trim().toUpperCase();
 
-            const result = await this.pg.query<RoomDetails>(query, [cleanCode]);
+            const room = await this.repo.findActiveRoomDetailsByCode(cleanCode);
 
-            if (result.rows.length === 0) {
+            if (!room) {
                 this.logger.warn({
                     message: "Room lookup failed: Code not found or inactive",
                     roomCode,
@@ -1061,7 +860,7 @@ export class WatchPartyService {
                 return null;
             }
 
-            return result.rows[0];
+            return room;
         } catch (error) {
             this.logger.error({
                 message: "Failed to execute room database lookup query",
@@ -1074,11 +873,7 @@ export class WatchPartyService {
     }
 
     async assertRoomActive(roomId: string): Promise<void> {
-        const result = await this.pg.query(
-            `SELECT id FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE' LIMIT 1`,
-            [roomId],
-        );
-        if (!result.rows[0]) {
+        if (!(await this.repo.isRoomActive(roomId))) {
             throw new ConflictException(
                 "The watch room is no longer accepting participants.",
             );
@@ -1091,39 +886,16 @@ export class WatchPartyService {
      * `excludeRoomId` skips the room being joined.
      */
     private async findCurrentRoom(
-        executor: PoolClient | PostgresProvider,
+        executor: SqlExecutor | undefined,
         userId: string,
         excludeRoomId?: string,
     ): Promise<{ roomId: string; roomCode: string; isOwner: boolean } | null> {
-        // Same SQL inside a transaction (PoolClient) or on the pool (PostgresProvider).
-        const query = (text: string, params: unknown[]) =>
-            (
-                executor as {
-                    query: (
-                        text: string,
-                        params: unknown[],
-                    ) => Promise<{ rows: unknown[] }>;
-                }
-            ).query(text, params);
-        const result = await query(
-            `SELECT r.id, r.room_code, (r.owner_id = $1) AS is_owner
-             FROM public.rooms r
-             WHERE r.lifecycle_status IN ('PROVISIONING', 'ACTIVE')
-               AND ($2::uuid IS NULL OR r.id <> $2::uuid)
-               AND (
-                   r.owner_id = $1
-                   OR EXISTS (
-                       SELECT 1 FROM public.room_participants rp
-                       WHERE rp.room_id = r.id AND rp.user_id = $1 AND rp.is_active = true
-                   )
-               )
-             ORDER BY (r.owner_id = $1) DESC
-             LIMIT 1`,
-            [userId, excludeRoomId ?? null],
+        // `executor` is the open transaction, or `undefined` for the pool.
+        const row = await this.repo.findCurrentRoom(
+            executor,
+            userId,
+            excludeRoomId,
         );
-        const row = result.rows[0] as
-            | { id: string; room_code: string; is_owner: boolean }
-            | undefined;
         return row
             ? { roomId: row.id, roomCode: row.room_code, isOwner: row.is_owner }
             : null;
@@ -1164,16 +936,9 @@ export class WatchPartyService {
             isOwner: boolean;
         }>
     > {
-        const result = await this.pg.query<ActiveMembershipRow>(
-            `SELECT rp.id AS participant_id, rp.room_id, rp.user_id,
-                    r.room_code, r.owner_id
-             FROM public.room_participants rp
-             INNER JOIN public.rooms r ON r.id = rp.room_id
-             WHERE rp.is_active = true
-               AND r.lifecycle_status = 'ACTIVE'`,
-        );
+        const rows = await this.repo.listActiveMemberships();
 
-        return result.rows.map((row) => ({
+        return rows.map((row) => ({
             participantId: row.participant_id,
             roomId: row.room_id,
             roomCode: row.room_code,
@@ -1193,15 +958,7 @@ export class WatchPartyService {
         stateVersion: string;
         participantCount: number;
     } | null> {
-        const result = await this.pg.query<RoomProjectionRow>(
-            `SELECT r.id, r.room_code, r.owner_id, r.movie_id, r.max_participants,
-                    r.lifecycle_status, r.state_version,
-                    (SELECT COUNT(*)::int FROM public.room_participants rp
-                     WHERE rp.room_id = r.id AND rp.is_active = true) AS participant_count
-             FROM public.rooms r WHERE r.id = $1`,
-            [roomId],
-        );
-        const row = result.rows[0];
+        const row = await this.repo.findRoomProjection(roomId);
         if (!row) return null;
 
         return {

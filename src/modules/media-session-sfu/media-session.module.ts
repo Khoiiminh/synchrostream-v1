@@ -2,6 +2,7 @@ import { InfrastructureModule } from "@/shared/infrastructure/infrastructure.mod
 import { Module } from "@nestjs/common";
 import { MediaSessionService } from "./media-session.service.js";
 import { MediaOrchestrationService } from "./media-orchestration.service.js";
+import { MediaSessionRepository } from "./media-session.repository.js";
 
 @Module({
     imports: [InfrastructureModule],
@@ -13,7 +14,11 @@ import { MediaOrchestrationService } from "./media-orchestration.service.js";
     // membership/provider authorization when SFU work resumes.
     controllers: [],
 
-    providers: [MediaSessionService, MediaOrchestrationService],
+    providers: [
+        MediaSessionRepository,
+        MediaSessionService,
+        MediaOrchestrationService,
+    ],
 
     exports: [MediaSessionService, MediaOrchestrationService],
 })

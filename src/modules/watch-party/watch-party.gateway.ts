@@ -18,7 +18,7 @@ import { Namespace } from "socket.io";
 import { WatchRoomActor } from "./watch-room.actor.js";
 import { JoinRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
-import { WsJwtGuard } from "../auth/ws-jwt.guard.js";
+import { WsJwtGuard } from "../auth/guards/ws-jwt.guard.js";
 import { LiveKitService } from "../livekit/livekit.service.js";
 import type { AuthenticatedSocket } from "../auth/auth.types.js";
 

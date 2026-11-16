@@ -18,7 +18,7 @@ import {
     ApiBody,
     ApiBearerAuth,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "./jwt-auth.guard.js";
+import { JwtAuthGuard } from "./guards/jwt-auth.guard.js";
 import type { Request as ExpressRequest } from "express";
 import type { AuthenticatedRequest } from "./auth.types.js";
 

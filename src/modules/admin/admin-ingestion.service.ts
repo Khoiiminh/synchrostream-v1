@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
 import {
     BadRequestException,
@@ -8,8 +7,9 @@ import {
     OnModuleDestroy,
     OnModuleInit,
 } from "@nestjs/common";
-import { InitiateUploadDto } from "./media-ingestion.dto.js";
+import { InitiateUploadDto } from "./admin.dto.js";
 import { AdminTranscodingService } from "./admin-transcoding.service.js";
+import { AdminRepository } from "./admin.repository.js";
 
 interface IngestionSession {
     uploadId: string;
@@ -25,7 +25,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
     private readonly SESSION_TTL_MS = 1800000;
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly adminRepository: AdminRepository,
         private readonly r2: CloudflareR2Provider,
         private readonly transcoding: AdminTranscodingService,
     ) {}
@@ -79,12 +79,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 uploadId: session.uploadId,
             });
 
-            const rollbackQuery = `
-                UPDATE movies 
-                SET status = 'FAILED'::processing_status 
-                WHERE id = $1 AND status = 'PROCESSING'::processing_status;
-            `;
-            await this.pg.query(rollbackQuery, [movieId]);
+            await this.adminRepository.markFailedIfProcessing(movieId);
         } catch (error) {
             this.logger.error({
                 message: "Failed to clean up aborted upload assets",
@@ -131,13 +126,8 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
     }
 
     async markIngestionAsFailed(movieId: string): Promise<void> {
-        const queryStr = `
-            UPDATE movies 
-            SET status = 'FAILED'::processing_status 
-            WHERE id = $1;
-        `;
         try {
-            await this.pg.query(queryStr, [movieId]);
+            await this.adminRepository.markFailed(movieId);
             this.logger.warn({
                 message: "Marked movie as FAILED after aborted ingestion",
                 movieId,
@@ -155,9 +145,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
     async initiateMovieUpload(
         dto: InitiateUploadDto,
     ): Promise<{ movieId: string; uploadId: string; objectKey: string }> {
-        const objectIdQuery = `SELECT uuidv7() AS id;`;
-        const row = await this.pg.query<{ id: string }>(objectIdQuery);
-        const movieId = row.rows[0].id;
+        const movieId = await this.adminRepository.generateMovieId();
 
         const objectKey = `raw-mezzanines/${movieId}.mp4`;
 
@@ -173,12 +161,11 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 description: dto.description,
             });
 
-            const insertQuery = `
-                INSERT INTO movies (id, title, status, metadata, hls_url)
-                VALUES ($1, $2, 'PROCESSING'::processing_status, $3::jsonb, NULL)
-                RETURNING id;
-            `;
-            await this.pg.query(insertQuery, [movieId, dto.title, metadata]);
+            await this.adminRepository.insertProcessingMovie(
+                movieId,
+                dto.title,
+                metadata,
+            );
 
             this.activeSessions.set(movieId, {
                 uploadId,

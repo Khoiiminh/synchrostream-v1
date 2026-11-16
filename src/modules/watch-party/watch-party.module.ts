@@ -6,11 +6,15 @@ import { WatchPartyGateway } from "./watch-party.gateway.js";
 import { WatchPartyController } from "./watch-party.controller.js";
 import { MediaSessionModule } from "../media-session-sfu/media-session.module.js";
 import { LiveKitApplicationModule } from "../livekit/livekit.module.js";
+import { AuthModule } from "../auth/auth.module.js";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
+import { RoomLifecycleOutboxRepository } from "./room-lifecycle-outbox.repository.js";
+import { WatchPartyRepository } from "./watch-party.repository.js";
 
 @Module({
     imports: [
         InfrastructureModule,
+        AuthModule,
         MediaSessionModule,
         LiveKitApplicationModule,
         JwtModule.register({
@@ -24,6 +28,8 @@ import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
         WatchPartyGateway,
         WatchPartyService,
         RoomLifecycleOutboxService,
+        WatchPartyRepository,
+        RoomLifecycleOutboxRepository,
     ],
 
     exports: [WatchPartyService],
