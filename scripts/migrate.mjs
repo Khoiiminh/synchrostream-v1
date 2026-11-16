@@ -71,14 +71,15 @@ async function withClient(fn) {
 }
 
 function run(options) {
-    const config = connectionConfig();
     return runner({
-        // node-pg-migrate accepts a connection string for databaseUrl, but we also
-        // preserve the custom pg config (SSL, lock_timeout, app name) for the runner.
-        ...config,
-        databaseUrl: config.connectionString,
-        dbClient: pg,
+        // databaseUrl takes a full pg ClientConfig, so SSL, lock_timeout and the
+        // app name reach the runner's connection. (`dbClient` must be a connected
+        // client instance, not the `pg` module; passing the module made the runner
+        // fall back to pg's localhost defaults.)
+        databaseUrl: connectionConfig(),
         dir: MIGRATIONS_DIR,
+        // Only *.sql files are migrations; skip dotfiles and migrations/README.md.
+        ignorePattern: "(\\..*)|(.*\\.md)",
         migrationsTable: MIGRATIONS_TABLE,
         checkOrder: true,
         singleTransaction: true,
