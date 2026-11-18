@@ -1,10 +1,17 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
+import { MediaCatalogCache } from "../media/media-catalog.cache.js";
 
-/** Write-side SQL for the `movies` table (ingestion and transcoding). */
+/**
+ * Write-side SQL for the `movies` table (ingestion and transcoding). Every
+ * write drops the cached catalog so GET /media/catalog sees it at once.
+ */
 @Injectable()
 export class AdminRepository {
-    constructor(private readonly pg: PostgresProvider) {}
+    constructor(
+        private readonly pg: PostgresProvider,
+        private readonly catalogCache: MediaCatalogCache,
+    ) {}
 
     async generateMovieId(): Promise<string> {
         const result = await this.pg.query<{ id: string }>(
@@ -26,6 +33,7 @@ export class AdminRepository {
             `,
             [movieId, title, metadataJson],
         );
+        await this.catalogCache.invalidate();
     }
 
     async findMovieStatus(
@@ -43,6 +51,7 @@ export class AdminRepository {
             `UPDATE movies SET status = 'PROCESSING'::processing_status WHERE id = $1;`,
             [movieId],
         );
+        await this.catalogCache.invalidate();
     }
 
     async markFailed(movieId: string): Promise<void> {
@@ -50,6 +59,7 @@ export class AdminRepository {
             `UPDATE movies SET status = 'FAILED'::processing_status WHERE id = $1;`,
             [movieId],
         );
+        await this.catalogCache.invalidate();
     }
 
     /** Only flips PROCESSING → FAILED; leaves finished movies alone. */
@@ -62,6 +72,7 @@ export class AdminRepository {
             `,
             [movieId],
         );
+        await this.catalogCache.invalidate();
     }
 
     async markAvailable(movieId: string, manifestKey: string): Promise<void> {
@@ -76,5 +87,6 @@ export class AdminRepository {
             `,
             [manifestKey, movieId],
         );
+        await this.catalogCache.invalidate();
     }
 }

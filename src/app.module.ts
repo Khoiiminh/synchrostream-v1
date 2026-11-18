@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AppController } from "./app.controller.js";
 import { AppService } from "./app.service.js";
 import { ConfigModule } from "@nestjs/config";
+import { ENV_FILE_PATH } from "./common/config/load-env.js";
 import { AuthModule } from "./modules/auth/auth.module.js";
 import { PasswordResetModule } from "./modules/password-reset/password-reset.module.js";
 import { InfrastructureModule } from "./shared/infrastructure/infrastructure.module.js";
@@ -15,7 +16,7 @@ import { SyncMetricsModule } from "./modules/sync-metrics/sync-metrics.module.js
 @Module({
     imports: [
         ConfigModule.forRoot({
-            envFilePath: ".env.development",
+            envFilePath: ENV_FILE_PATH,
             isGlobal: true,
         }),
         InfrastructureModule,

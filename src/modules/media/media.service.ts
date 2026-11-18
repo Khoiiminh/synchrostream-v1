@@ -1,6 +1,7 @@
 import { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { MediaRepository } from "./media.repository.js";
+import { MediaCatalogCache } from "./media-catalog.cache.js";
 import type { CatalogMovie, PlayableMovieRow } from "./media.types.js";
 
 /**
@@ -23,6 +24,7 @@ export class MediaService {
     constructor(
         private readonly mediaRepository: MediaRepository,
         private readonly r2: CloudflareR2Provider,
+        private readonly catalogCache: MediaCatalogCache,
     ) {}
 
     /**
@@ -94,8 +96,13 @@ export class MediaService {
     async getAvailableCatalog(): Promise<CatalogMovie[]> {
         this.logger.debug({ message: "Fetching available movie catalog" });
 
+        // Cached as the final response shape; a miss or Redis outage reads
+        // PostgreSQL exactly as before.
+        const cached = await this.catalogCache.get();
+        if (cached) return cached;
+
         const records = await this.mediaRepository.findAvailableCatalog();
-        return records.map((movie) => {
+        const catalog = records.map((movie) => {
             let parsedMetadata: unknown = {};
 
             if (movie.metadata) {
@@ -115,5 +122,8 @@ export class MediaService {
                 metadata: parsedMetadata,
             };
         });
+
+        await this.catalogCache.set(catalog);
+        return catalog;
     }
 }

@@ -41,6 +41,21 @@ export class RedisProvider implements OnModuleInit, OnModuleDestroy {
         this.client = new Redis(connectionString, commonOptions);
         this.publisher = new Redis(connectionString, commonOptions);
 
+        // Without a listener ioredis prints "Unhandled error event" for every
+        // failed reconnect. Commands still queue and retry as before.
+        for (const [name, connection] of [
+            ["client", this.client],
+            ["publisher", this.publisher],
+        ] as const) {
+            connection.on("error", (err: Error) => {
+                this.logger.warn({
+                    message: "Redis connection error",
+                    connection: name,
+                    err,
+                });
+            });
+        }
+
         this.logger.log({ message: "Redis clients initialized" });
     }
 

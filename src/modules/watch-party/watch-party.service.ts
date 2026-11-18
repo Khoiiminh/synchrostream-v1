@@ -24,11 +24,30 @@ import { randomInt } from "node:crypto";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
 import { WatchPartyRepository } from "./watch-party.repository.js";
+import {
+    AttemptLimiter,
+    JOIN_PASSWORD_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const ROOM_CODE_GENERATION_ATTEMPTS = 5;
 /** Same cost factor as user passwords (auth and password-reset). */
 const ROOM_PASSWORD_BCRYPT_ROUNDS = 10;
+/**
+ * Every room has its own password; there are no open rooms. An empty password
+ * would hash to a valid bcrypt value that a blank join (or an invite link with
+ * no password) then matches, so it is rejected at creation and at join.
+ */
+export const ROOM_PASSWORD_MIN_LENGTH = 4;
+export const ROOM_PASSWORD_MAX_LENGTH = 64;
+
+function isUsableRoomPassword(value: unknown): value is string {
+    return (
+        typeof value === "string" &&
+        value.trim().length >= ROOM_PASSWORD_MIN_LENGTH &&
+        value.length <= ROOM_PASSWORD_MAX_LENGTH
+    );
+}
 
 function generateRoomCode(): string {
     let code = "";
@@ -54,8 +73,12 @@ export class CreateRoomDto {
     @ApiProperty({
         description: "Plain text password constraint challenge signature",
         example: "SecurePass123",
+        minLength: ROOM_PASSWORD_MIN_LENGTH,
+        maxLength: ROOM_PASSWORD_MAX_LENGTH,
     })
     @IsString()
+    @Length(ROOM_PASSWORD_MIN_LENGTH, ROOM_PASSWORD_MAX_LENGTH)
+    @Matches(/\S/, { message: "Room password cannot be blank." })
     passwordPlain!: string;
 
     @ApiProperty({
@@ -114,6 +137,7 @@ export class WatchPartyService {
     constructor(
         private readonly repo: WatchPartyRepository,
         private readonly lifecycleOutbox: RoomLifecycleOutboxService,
+        private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
     /**
@@ -159,6 +183,13 @@ export class WatchPartyService {
         });
 
         const requestedRoomCode = p.dto.roomCode?.trim().toUpperCase();
+
+        // Enforced here as well as on the DTO, so every caller is covered.
+        if (!isUsableRoomPassword(p.dto.passwordPlain)) {
+            throw new BadRequestException(
+                `A room password of ${ROOM_PASSWORD_MIN_LENGTH}-${ROOM_PASSWORD_MAX_LENGTH} characters is required.`,
+            );
+        }
 
         // Hash once, outside the transaction, so no lock is held while bcrypt runs.
         const passwordHash = await bcrypt.hash(
@@ -334,7 +365,8 @@ export class WatchPartyService {
      * ### Workflow & Mechanism
      * 1. **Row-Level Locking**: Queries and locks the target room row (`FOR UPDATE`) using
      *    the normalized room code to prevent concurrent joins from observing stale capacity.
-     * 2. **Security Verification**: Validates the room's password (unless the user is the room owner).
+     * 2. **Security Verification**: Validates the room's password, except for the room owner and
+     *    for a user who already holds an ACTIVE participant record in this room (a reconnect).
      * 3. **Single-Room Enforcement**: Verifies that the user is not actively participating in
      *    any other active room (`r.is_active = true` and `rp.is_active = true`).
      * 4. **Membership Handling**:
@@ -426,23 +458,81 @@ export class WatchPartyService {
 
                     const isOwner = p.userId === room.owner_id;
 
-                    if (
-                        !isOwner &&
-                        !(await bcrypt.compare(
-                            p.dto.passwordPlain,
-                            room.password,
-                        ))
-                    ) {
-                        this.logger.warn({
-                            message:
-                                "Join room rejected: Invalid room credentials",
-                            roomCode: cleanCode,
-                            roomId: room.id,
-                            userId: p.userId,
-                        });
+                    /*
+                     * The password is checked only on first entry. The owner
+                     * never needs it, and a user with an ACTIVE participant
+                     * record already proved it when that record was created, so
+                     * a reconnect (refresh, network drop within the grace
+                     * window) is accepted without it. The record goes inactive
+                     * on voluntary leave or grace expiry, after which the
+                     * password is required again.
+                     */
+                    const passwordRequired = !isOwner && !existingParticipant;
+                    const attemptId = `${room.id}:${p.userId}`;
 
-                        throw new BadRequestException(
-                            "Security credentials verification failure: Authentication rejected.",
+                    if (passwordRequired) {
+                        /*
+                         * A blank password never opens a room. The socket
+                         * join payload is not run through the HTTP
+                         * ValidationPipe, so this is checked here. Not counted
+                         * as a wrong guess: nothing was guessed.
+                         */
+                        if (
+                            typeof p.dto.passwordPlain !== "string" ||
+                            p.dto.passwordPlain.trim().length === 0
+                        ) {
+                            this.logger.warn({
+                                message:
+                                    "Join room rejected: Room password missing",
+                                roomCode: cleanCode,
+                                roomId: room.id,
+                                userId: p.userId,
+                            });
+
+                            throw new BadRequestException(
+                                "This room is password protected. Enter the room password to join.",
+                            );
+                        }
+
+                        /*
+                         * Wrong-password limit, checked before bcrypt so a
+                         * blocked guesser costs no hashing while the room row
+                         * is locked. Only first entries are counted; the owner
+                         * and reconnecting members never reach this branch.
+                         * Fails open when Redis is unavailable.
+                         */
+                        await this.attemptLimiter.assertAllowed(
+                            JOIN_PASSWORD_RULE,
+                            attemptId,
+                        );
+
+                        if (
+                            !(await bcrypt.compare(
+                                p.dto.passwordPlain,
+                                room.password,
+                            ))
+                        ) {
+                            await this.attemptLimiter.recordFailure(
+                                JOIN_PASSWORD_RULE,
+                                attemptId,
+                            );
+
+                            this.logger.warn({
+                                message:
+                                    "Join room rejected: Invalid room credentials",
+                                roomCode: cleanCode,
+                                roomId: room.id,
+                                userId: p.userId,
+                            });
+
+                            throw new BadRequestException(
+                                "Security credentials verification failure: Authentication rejected.",
+                            );
+                        }
+
+                        await this.attemptLimiter.reset(
+                            JOIN_PASSWORD_RULE,
+                            attemptId,
                         );
                     }
 

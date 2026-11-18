@@ -8,11 +8,14 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
-import { RedisProvider } from "src/shared/infrastructure/cache/redis.provider.js";
 import { LoginDto, RegisterDto } from "./auth.dto.js";
 import { AuthRepository } from "./auth.repository.js";
 import type { JwtPayload } from "./auth.types.js";
 import { RedisBlacklistProvider } from "@/shared/infrastructure/cache/redis-blacklist.provider.js";
+import {
+    AttemptLimiter,
+    LOGIN_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 @Injectable()
 export class AuthService {
@@ -21,8 +24,8 @@ export class AuthService {
     constructor(
         private readonly authRepository: AuthRepository,
         private readonly jwtService: JwtService,
-        private readonly redis: RedisProvider,
         private readonly blacklist: RedisBlacklistProvider,
+        private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
     async register(dto: RegisterDto) {
@@ -68,6 +71,10 @@ export class AuthService {
             email: maskEmail(dto.email),
         });
 
+        // Counted per email (hashed), checked before any bcrypt work.
+        const attemptId = AttemptLimiter.emailId(dto.email);
+        await this.attemptLimiter.assertAllowed(LOGIN_RULE, attemptId);
+
         // Unknown email and wrong password get the same 401 so the response
         // doesn't reveal which accounts exist.
         const user = await this.authRepository.findCredentialsByEmail(
@@ -77,6 +84,7 @@ export class AuthService {
             !user ||
             !(await bcrypt.compare(dto.password, user.password_hash))
         ) {
+            await this.attemptLimiter.recordFailure(LOGIN_RULE, attemptId);
             this.logger.warn({
                 message: "Login failed: invalid credentials",
                 email: maskEmail(dto.email),
@@ -93,12 +101,7 @@ export class AuthService {
         const expiresIn = user.role === "ADMIN" ? "1h" : "7d";
         const token = this.jwtService.sign(payload, { expiresIn });
 
-        await this.redis["client"].set(
-            `user:${user.id}:session`,
-            token,
-            "EX",
-            86400,
-        );
+        await this.attemptLimiter.reset(LOGIN_RULE, attemptId);
 
         this.logger.log({
             message: "User logged in",
@@ -139,10 +142,6 @@ export class AuthService {
             });
         }
 
-        const userId = decoded.sub;
-        await this.redis["client"].del(`user:${userId}:session`);
-
-        this.logger.debug({ message: "Session cleared", userId });
         return {
             message: "Logged out and token revoked",
         };

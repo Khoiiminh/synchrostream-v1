@@ -13,6 +13,10 @@ import { google } from "googleapis";
 import { RequestResetDto, ResetPasswordDto } from "./password-reset.dto.js";
 import { PasswordResetRepository } from "./password-reset.repository.js";
 import { ConfigService } from "@nestjs/config";
+import {
+    AttemptLimiter,
+    PASSWORD_RESET_REQUEST_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 @Injectable()
 export class PasswordService implements OnModuleInit {
@@ -29,6 +33,7 @@ export class PasswordService implements OnModuleInit {
     constructor(
         private readonly configService: ConfigService,
         private readonly passwordResetRepository: PasswordResetRepository,
+        private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
     onModuleInit() {
@@ -86,6 +91,13 @@ export class PasswordService implements OnModuleInit {
             message: "Password reset requested",
             email: maskEmail(dto.email),
         });
+
+        // Every request counts, known email or not, so the limit itself
+        // reveals nothing about which accounts exist.
+        await this.attemptLimiter.consume(
+            PASSWORD_RESET_REQUEST_RULE,
+            AttemptLimiter.emailId(dto.email),
+        );
 
         const userId = await this.passwordResetRepository.findUserIdByEmail(
             dto.email,

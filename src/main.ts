@@ -1,3 +1,5 @@
+// Must stay the first import: loads the env file before anything reads process.env.
+import "./common/config/load-env.js";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { Logger, ValidationPipe } from "@nestjs/common";
