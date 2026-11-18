@@ -9,7 +9,6 @@ import {
 } from "@nestjs/common";
 import { PasswordService } from "./password-reset.service.js";
 import { RequestResetDto, ResetPasswordDto } from "./password-reset.dto.js";
-import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 
 @ApiTags("Password Recovery Engine")
@@ -17,10 +16,7 @@ import { ApiOperation, ApiResponse, ApiTags } from "@nestjs/swagger";
 export class PasswordController {
     private readonly logger = new Logger(PasswordController.name);
 
-    constructor(
-        private readonly passwordService: PasswordService,
-        private readonly redis: RedisProvider,
-    ) {}
+    constructor(private readonly passwordService: PasswordService) {}
 
     @Post("request")
     @HttpCode(HttpStatus.OK)
@@ -68,11 +64,11 @@ export class PasswordController {
     @ApiOperation({
         summary: "Confirm password reset",
         description:
-            "Validates the reset token, updates the password, and invalidates all existing sessions (Global Logout).",
+            "Validates the reset token and updates the password. Existing access tokens stay valid until they expire.",
     })
     @ApiResponse({
         status: 200,
-        description: "Password successfully updated and sessions revoked.",
+        description: "Password successfully updated.",
         schema: {
             example: {
                 success: true,
@@ -97,14 +93,6 @@ export class PasswordController {
     async resetPassword(@Body() dto: ResetPasswordDto) {
         this.logger.debug({ message: "Password reset confirmation received" });
         const result = await this.passwordService.resetPassword(dto);
-
-        if (result.userId) {
-            await this.redis["client"].del(`user:${result.userId}:session`);
-            this.logger.log({
-                message: "Sessions invalidated after password reset",
-                userId: result.userId,
-            });
-        }
 
         return { message: result.message };
     }

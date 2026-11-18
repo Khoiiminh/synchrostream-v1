@@ -1,6 +1,16 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { IsUrl, IsUUID } from "class-validator";
 
+export class CreateMediaSessionDto {
+    @ApiProperty({
+        description:
+            "UUID of the watch room for which the media session is created",
+        format: "uuid",
+    })
+    @IsUUID()
+    roomId!: string;
+}
+
 export class MediaSessionConnectionDto {
     @ApiProperty({
         description: "UUID of the MediaSession.",

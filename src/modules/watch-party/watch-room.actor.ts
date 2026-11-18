@@ -31,7 +31,6 @@ export class WatchRoomActor {
     constructor(
         public readonly roomId: string,
         public readonly roomCode: string,
-        public readonly passwordPlain: string,
         public readonly ownerId: string,
         public readonly movieId: string,
         public readonly maxParticipants: number,

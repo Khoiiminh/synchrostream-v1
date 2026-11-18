@@ -18,9 +18,9 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
-import { RolesGuard } from "../auth/roles.guard.js";
-import { Roles } from "../auth/roles.decorator.js";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
+import { RolesGuard } from "../auth/guards/roles.guard.js";
+import { Roles } from "../auth/decorators/roles.decorator.js";
 import { CreateRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyGateway } from "./watch-party.gateway.js";
 import type { AuthenticatedRequest } from "../auth/auth.types.js";

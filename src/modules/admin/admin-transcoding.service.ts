@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
 import {
     Injectable,
@@ -13,13 +12,14 @@ import * as fs from "fs";
 import { ConfigService } from "@nestjs/config";
 import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
 import { Readable } from "stream";
+import { AdminRepository } from "./admin.repository.js";
 
 @Injectable()
 export class AdminTranscodingService implements OnModuleInit {
     private readonly logger = new Logger(AdminTranscodingService.name);
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly adminRepository: AdminRepository,
         private readonly r2: CloudflareR2Provider,
         private readonly configService: ConfigService,
         private readonly telemetryGateway: MediaTelemetryGateway,
@@ -64,13 +64,9 @@ export class AdminTranscodingService implements OnModuleInit {
     async initiateBackgroundTranscode(movieId: string): Promise<void> {
         this.logger.log({ message: "Transcode requested", movieId });
         // 1. Move DB verification where it belongs
-        const checkMovieQuery = `SELECT id, status FROM movies WHERE id = $1`;
-        const movies = await this.pg.query<{ id: string; status: string }>(
-            checkMovieQuery,
-            [movieId],
-        );
+        const targetMovie = await this.adminRepository.findMovieStatus(movieId);
 
-        if (!movies || movies.rows.length === 0) {
+        if (!targetMovie) {
             this.logger.warn({
                 message: "Transcode rejected: movie not found",
                 movieId,
@@ -80,7 +76,6 @@ export class AdminTranscodingService implements OnModuleInit {
             );
         }
 
-        const targetMovie = movies.rows[0];
         const mezzanineKey = `raw-mezzanines/${targetMovie.id}.mp4`;
 
         this.logger.debug({
@@ -88,8 +83,7 @@ export class AdminTranscodingService implements OnModuleInit {
             movieId,
         });
 
-        const updateProcessing = `UPDATE movies SET status = 'PROCESSING'::processing_status WHERE id = $1;`;
-        await this.pg.query(updateProcessing, [movieId]);
+        await this.adminRepository.markProcessing(movieId);
 
         /// TELEMETRY BROADCAST: Notify UI that transcoding has officially begun
         this.telemetryGateway.broadcastMovieStatusUpdate({
@@ -422,16 +416,7 @@ export class AdminTranscodingService implements OnModuleInit {
             });
 
             // 7. STATE BOUNDARY SYNCHRONIZATION VIA POSTGRES MUTATION
-            const assetSyncQuery = `
-                UPDATE movies 
-                SET 
-                    hls_url = $1,
-                    status = 'AVAILABLE'::processing_status,
-                    is_cmaf_ready = true
-                WHERE id = $2;
-            `;
-
-            await this.pg.query(assetSyncQuery, [finalManifestKey, movieId]);
+            await this.adminRepository.markAvailable(movieId, finalManifestKey);
 
             this.logger.log({
                 message: "Transcode completed; movie AVAILABLE",
@@ -451,8 +436,7 @@ export class AdminTranscodingService implements OnModuleInit {
                 err: error,
             });
             try {
-                const failStatusQuery = `UPDATE movies SET status = 'FAILED'::processing_status WHERE id = $1;`;
-                await this.pg.query(failStatusQuery, [movieId]);
+                await this.adminRepository.markFailed(movieId);
 
                 // FAILURE BROADCAST: Inform UI that transcoding hit a structural exception
                 this.telemetryGateway.broadcastMovieStatusUpdate({

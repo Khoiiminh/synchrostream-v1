@@ -12,9 +12,9 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard.js";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
 import { LiveKitService } from "./livekit.service.js";
-import { CreateMediaSessionDto } from "../media-session-sfu/dto/media-session.dto.js";
+import { CreateMediaSessionDto } from "../media-session-sfu/media-session.dto.js";
 import type { AuthenticatedRequest } from "../auth/auth.types.js";
 
 @ApiTags("LiveKit")

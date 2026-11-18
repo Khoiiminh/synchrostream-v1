@@ -8,25 +8,24 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
-import { RedisProvider } from "src/shared/infrastructure/cache/redis.provider.js";
-import { PostgresProvider } from "src/shared/infrastructure/database/postgres.provider.js";
 import { LoginDto, RegisterDto } from "./auth.dto.js";
-import type { JwtPayload, UserProfileRow } from "./auth.types.js";
-
-interface UserCredentialsRow extends UserProfileRow {
-    password_hash: string;
-}
+import { AuthRepository } from "./auth.repository.js";
+import type { JwtPayload } from "./auth.types.js";
 import { RedisBlacklistProvider } from "@/shared/infrastructure/cache/redis-blacklist.provider.js";
+import {
+    AttemptLimiter,
+    LOGIN_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 @Injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);
 
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly authRepository: AuthRepository,
         private readonly jwtService: JwtService,
-        private readonly redis: RedisProvider,
         private readonly blacklist: RedisBlacklistProvider,
+        private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
     async register(dto: RegisterDto) {
@@ -35,12 +34,12 @@ export class AuthService {
             email: maskEmail(dto.email),
         });
 
-        const existing = await this.pg.query(
-            "SELECT id FROM users WHERE email = $1 OR username = $2",
-            [dto.email, dto.username],
-        );
-
-        if (existing.rows.length > 0) {
+        if (
+            await this.authRepository.existsByEmailOrUsername(
+                dto.email,
+                dto.username,
+            )
+        ) {
             this.logger.warn({
                 message: "Registration rejected: account already exists",
                 email: maskEmail(dto.email),
@@ -50,18 +49,19 @@ export class AuthService {
 
         const passwordHash = await bcrypt.hash(dto.password, 10);
 
-        const newUser = await this.pg.query<{ id: string }>(
-            "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
-            [dto.username, dto.email, passwordHash],
+        const userId = await this.authRepository.createUser(
+            dto.username,
+            dto.email,
+            passwordHash,
         );
 
         this.logger.log({
             message: "User registered",
-            userId: newUser.rows[0].id,
+            userId: userId,
         });
         return {
             message: "Success: Account Created",
-            userId: newUser.rows[0].id,
+            userId: userId,
         };
     }
 
@@ -71,18 +71,20 @@ export class AuthService {
             email: maskEmail(dto.email),
         });
 
-        const result = await this.pg.query<UserCredentialsRow>(
-            "SELECT id, username, email, password_hash, role FROM users WHERE email = $1",
-            [dto.email],
-        );
+        // Counted per email (hashed), checked before any bcrypt work.
+        const attemptId = AttemptLimiter.emailId(dto.email);
+        await this.attemptLimiter.assertAllowed(LOGIN_RULE, attemptId);
 
         // Unknown email and wrong password get the same 401 so the response
         // doesn't reveal which accounts exist.
-        const user = result.rows[0];
+        const user = await this.authRepository.findCredentialsByEmail(
+            dto.email,
+        );
         if (
             !user ||
             !(await bcrypt.compare(dto.password, user.password_hash))
         ) {
+            await this.attemptLimiter.recordFailure(LOGIN_RULE, attemptId);
             this.logger.warn({
                 message: "Login failed: invalid credentials",
                 email: maskEmail(dto.email),
@@ -99,12 +101,7 @@ export class AuthService {
         const expiresIn = user.role === "ADMIN" ? "1h" : "7d";
         const token = this.jwtService.sign(payload, { expiresIn });
 
-        await this.redis["client"].set(
-            `user:${user.id}:session`,
-            token,
-            "EX",
-            86400,
-        );
+        await this.attemptLimiter.reset(LOGIN_RULE, attemptId);
 
         this.logger.log({
             message: "User logged in",
@@ -145,29 +142,15 @@ export class AuthService {
             });
         }
 
-        const userId = decoded.sub;
-        await this.redis["client"].del(`user:${userId}:session`);
-
-        this.logger.debug({ message: "Session cleared", userId });
         return {
             message: "Logged out and token revoked",
         };
     }
 
     async findUserProfileById(userId: string) {
-        const query = `
-      SELECT 
-        id, 
-        username, 
-        email, 
-        role 
-      FROM public.users 
-      WHERE id = $1;
-    `;
+        const user = await this.authRepository.findProfileById(userId);
 
-        const user = await this.pg.query<UserProfileRow>(query, [userId]);
-
-        if (!user || user.rows.length === 0) {
+        if (!user) {
             this.logger.warn({
                 message: "Profile lookup failed: user not found",
                 userId,
@@ -177,6 +160,6 @@ export class AuthService {
             );
         }
 
-        return user.rows[0];
+        return user;
     }
 }

@@ -20,7 +20,7 @@ export interface CreatedRoomRow {
 }
 
 export interface LockedRoomRow extends CreatedRoomRow {
-    /** Required at room creation, so never NULL. */
+    /** bcrypt hash of the room password. Required at room creation, so never NULL. */
     password: string;
     lifecycle_status: RoomLifecycleStatus;
 }
@@ -93,4 +93,39 @@ export interface RoomProjectionRow {
     lifecycle_status: RoomLifecycleStatus;
     state_version: string;
     participant_count: number;
+}
+
+/** An owner's existing PROVISIONING/ACTIVE room (room-creation guard). */
+export interface OwnedRoomRow {
+    id: string;
+    room_code: string;
+}
+
+export interface MembershipRoomRow {
+    room_id: string;
+}
+
+export interface IdRow {
+    id: string;
+}
+
+/** `findCurrentRoom` result row. */
+export interface CurrentRoomRow {
+    id: string;
+    room_code: string;
+    is_owner: boolean;
+}
+
+/** Owner of a Redis room-code key, as recorded in PostgreSQL. */
+export interface RoomCodeHolderRow {
+    room_code: string;
+    lifecycle_status: RoomLifecycleStatus;
+}
+
+export interface OutboxEvent {
+    event_id: string;
+    event_type: "ROOM_RECONCILE" | "LIVEKIT_SESSION_RECONCILE";
+    aggregate_id: string;
+    attempts: number;
+    created_at: Date;
 }

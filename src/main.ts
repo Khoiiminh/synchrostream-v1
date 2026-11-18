@@ -1,13 +1,15 @@
+// Must stay the first import: loads the env file before anything reads process.env.
+import "./common/config/load-env.js";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { Logger, ValidationPipe } from "@nestjs/common";
 import { TransformationInterceptor } from "./common/interceptors/transformation.interceptor.js";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
-import { GlobalExceptionFilter } from "./common/interceptors/http-exception.filter.js";
+import { GlobalExceptionFilter } from "./common/filters/http-exception.filter.js";
 import cookieParser from "cookie-parser";
 import { ConfigService } from "@nestjs/config";
 import { AppLogger } from "./common/logging/logger.js";
-import { requestLoggingMiddleware } from "./common/logging/request-logging.middleware.js";
+import { requestLoggingMiddleware } from "./common/middleware/request-logging.middleware.js";
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule, { bufferLogs: true });

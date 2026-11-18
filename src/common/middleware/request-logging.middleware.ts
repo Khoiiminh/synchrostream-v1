@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Logger } from "@nestjs/common";
 import type { NextFunction, Request, Response } from "express";
-import { runWithLogContext } from "./logger.js";
+import { runWithLogContext } from "../logging/logger.js";
 
 const REQUEST_ID_HEADER = "x-request-id";
 const REQUEST_ID_PATTERN = /^[\w.-]{1,128}$/;

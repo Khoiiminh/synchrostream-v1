@@ -1,4 +1,3 @@
-import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import {
     ConflictException,
     Injectable,
@@ -6,16 +5,17 @@ import {
 } from "@nestjs/common";
 import { MediaSessionService } from "./media-session.service.js";
 import { SfuControlClient } from "@/shared/infrastructure/sfu/sfu-control.client.js";
-import { MediaSession } from "./media-session.types.js";
+import { MediaSession, SfuNodeStatus } from "./media-session.types.js";
+import { MediaSessionRepository } from "./media-session.repository.js";
 import { SfuSignalingTokenService } from "@/shared/infrastructure/sfu/sfu-signaling-token.service.js";
-import { MediaSessionConnectionDto } from "./dto/media-session-connection.dto.js";
+import { MediaSessionConnectionDto } from "./media-session.dto.js";
 
 export interface SfuNode {
     id: string;
     nodeId: string;
     endpoint: string;
     signalingEndpoint: string;
-    status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
+    status: SfuNodeStatus;
     capacity: number;
     lastHeartbeatAt: Date | null;
 }
@@ -23,7 +23,7 @@ export interface SfuNode {
 @Injectable()
 export class MediaOrchestrationService {
     constructor(
-        private readonly pg: PostgresProvider,
+        private readonly repository: MediaSessionRepository,
         private readonly mediaSessionService: MediaSessionService,
         private readonly sfuControlClient: SfuControlClient,
         private readonly sfuSignalingTokenService: SfuSignalingTokenService,
@@ -48,76 +48,45 @@ export class MediaOrchestrationService {
             );
         }
 
-        const participantQuery = `
-            SELECT
-                rp.id AS participant_id,
-                rp.user_id,
-                rp.room_id
-            FROM public.room_participants rp
-            WHERE rp.room_id = $1
-            AND rp.user_id = $2
-            LIMIT 1
-        `;
+        const participant = await this.repository.findRoomParticipant(
+            session.roomId,
+            userId,
+        );
 
-        const participant = await this.pg.query<{
-            participant_id: string;
-            user_id: string;
-            room_id: string;
-        }>(participantQuery, [session.roomId, userId]);
-
-        if (!participant || participant.rows.length < 1) {
+        if (!participant) {
             throw new NotFoundException(
                 "The authenticated user is not a participant of the MediaSession room.",
             );
         }
 
-        const nodeQuery = `
-            SELECT
-                id,
-                node_id,
-                endpoint,
-                signaling_endpoint,
-                status
-            FROM public.sfu_nodes
-            WHERE id = $1
-            LIMIT 1
-        `;
+        const node = await this.repository.findSfuNodeConnectionById(
+            session.assignedSfuNodeId,
+        );
 
-        const node = await this.pg.query<{
-            id: string;
-            node_id: string;
-            endpoint: string;
-            signaling_endpoint: string;
-            status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
-        }>(nodeQuery, [session.assignedSfuNodeId]);
-
-        if (!node || node.rows.length < 1) {
+        if (!node) {
             throw new NotFoundException(
                 `Assigned SFU node ${session.assignedSfuNodeId} does not exist.`,
             );
         }
 
-        if (
-            node.rows[0].status !== "HEALTHY" &&
-            node.rows[0].status !== "DEGRADED"
-        ) {
+        if (node.status !== "HEALTHY" && node.status !== "DEGRADED") {
             throw new ConflictException(
-                `Assigned SFU node ${node.rows[0].node_id} is not available.`,
+                `Assigned SFU node ${node.node_id} is not available.`,
             );
         }
 
         const signalingToken = this.sfuSignalingTokenService.generateToken({
             sub: userId,
             mediaSessionId: session.id,
-            participantId: participant.rows[0].participant_id,
-            nodeId: node.rows[0].node_id,
+            participantId: participant.participant_id,
+            nodeId: node.node_id,
         });
 
         return {
             mediaSessionId: session.id,
-            participantId: participant.rows[0].participant_id,
-            sfuNodeId: node.rows[0].node_id,
-            signalingEndpoint: node.rows[0].signaling_endpoint,
+            participantId: participant.participant_id,
+            sfuNodeId: node.node_id,
+            signalingEndpoint: node.signaling_endpoint,
             signalingToken,
         };
     }
@@ -162,51 +131,22 @@ export class MediaOrchestrationService {
     }
 
     async selectSfuNode(): Promise<SfuNode> {
-        const query = `
-            SELECT 
-                id,
-                node_id,
-                endpoint,
-                signaling_endpoint,
-                status,
-                capacity,
-                last_heartbeat_at
-            FROM public.sfu_nodes
-            WHERE status IN ('HEALTHY', 'DEGRADED')
-            ORDER BY
-                CASE
-                    WHEN status = 'HEALTHY' THEN 0
-                    ELSE 1
-                END,
-                capacity DESC,
-                last_heartbeat_at DESC NULLS LAST
-            LIMIT 1
-        `;
+        const row = await this.repository.findBestAvailableSfuNode();
 
-        const row = await this.pg.query<{
-            id: string;
-            node_id: string;
-            endpoint: string;
-            signaling_endpoint: string;
-            status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
-            capacity: number;
-            last_heartbeat_at: Date | null;
-        }>(query);
-
-        if (!row || row.rows.length < 1) {
+        if (!row) {
             throw new ConflictException(
                 "No available SFU node is currently available.",
             );
         }
 
         return {
-            id: row.rows[0].id,
-            nodeId: row.rows[0].node_id,
-            endpoint: row.rows[0].endpoint,
-            signalingEndpoint: row.rows[0].signaling_endpoint,
-            status: row.rows[0].status,
-            capacity: row.rows[0].capacity,
-            lastHeartbeatAt: row.rows[0].last_heartbeat_at,
+            id: row.id,
+            nodeId: row.node_id,
+            endpoint: row.endpoint,
+            signalingEndpoint: row.signaling_endpoint,
+            status: row.status,
+            capacity: row.capacity,
+            lastHeartbeatAt: row.last_heartbeat_at,
         };
     }
 
@@ -228,25 +168,9 @@ export class MediaOrchestrationService {
             );
         }
 
-        const nodeQuery = `
-            SELECT
-                id,
-                node_id,
-                endpoint,
-                status
-            FROM public.sfu_nodes
-            WHERE id = $1
-            LIMIT 1
-        `;
+        const node = await this.repository.findSfuNodeEndpointById(nodeId);
 
-        const node = await this.pg.query<{
-            id: string;
-            node_id: string;
-            endpoint: string;
-            status: "HEALTHY" | "DEGRADED" | "UNAVAILABLE";
-        }>(nodeQuery, [nodeId]);
-
-        if (!node || node.rows.length < 1) {
+        if (!node) {
             throw new ConflictException(
                 `Assigned SFU node ${nodeId} does not exist.`,
             );
@@ -255,7 +179,7 @@ export class MediaOrchestrationService {
         await this.mediaSessionService.endMediaSession(mediaSessionId);
 
         await this.sfuControlClient.endMediaSession(
-            node.rows[0].endpoint,
+            node.endpoint,
             mediaSessionId,
         );
 

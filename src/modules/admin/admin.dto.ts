@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, MaxLength } from "class-validator";
+import { IsNotEmpty, IsString, IsUUID, MaxLength } from "class-validator";
 
 export class InitiateUploadDto {
     @IsString()
@@ -41,4 +41,10 @@ export class CompleteUploadDto {
 
     @IsNotEmpty()
     parts!: Array<{ PartNumber: number; ETag: string }>;
+}
+
+export class StartTranscodeDto {
+    @IsUUID()
+    @IsNotEmpty()
+    movieId!: string;
 }

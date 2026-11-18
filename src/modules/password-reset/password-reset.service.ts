@@ -10,9 +10,13 @@ import * as bcrypt from "bcrypt";
 import * as crypto from "crypto";
 import * as nodemailer from "nodemailer";
 import { google } from "googleapis";
-import { PostgresProvider } from "src/shared/infrastructure/database/postgres.provider.js";
 import { RequestResetDto, ResetPasswordDto } from "./password-reset.dto.js";
+import { PasswordResetRepository } from "./password-reset.repository.js";
 import { ConfigService } from "@nestjs/config";
+import {
+    AttemptLimiter,
+    PASSWORD_RESET_REQUEST_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 @Injectable()
 export class PasswordService implements OnModuleInit {
@@ -28,7 +32,8 @@ export class PasswordService implements OnModuleInit {
 
     constructor(
         private readonly configService: ConfigService,
-        private readonly pg: PostgresProvider,
+        private readonly passwordResetRepository: PasswordResetRepository,
+        private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
     onModuleInit() {
@@ -87,12 +92,18 @@ export class PasswordService implements OnModuleInit {
             email: maskEmail(dto.email),
         });
 
-        const user = await this.pg.query<{ id: string }>(
-            "SELECT id FROM users WHERE email = $1",
-            [dto.email],
+        // Every request counts, known email or not, so the limit itself
+        // reveals nothing about which accounts exist.
+        await this.attemptLimiter.consume(
+            PASSWORD_RESET_REQUEST_RULE,
+            AttemptLimiter.emailId(dto.email),
         );
 
-        if (!user || user.rows.length < 1) {
+        const userId = await this.passwordResetRepository.findUserIdByEmail(
+            dto.email,
+        );
+
+        if (!userId) {
             // Log as warn, but won't throw to prevent email enumeration attacks
             this.logger.warn({
                 message: "Password reset requested for unknown email",
@@ -112,12 +123,13 @@ export class PasswordService implements OnModuleInit {
 
         this.logger.debug({
             message: "Generated password reset token",
-            userId: user.rows[0].id,
+            userId,
         });
 
-        await this.pg.query(
-            "UPDATE users SET reset_token = $1, reset_expires = $2 WHERE id = $3",
-            [token, expiresAt, user.rows[0].id],
+        await this.passwordResetRepository.saveResetToken(
+            userId,
+            token,
+            expiresAt,
         );
 
         try {
@@ -175,12 +187,12 @@ export class PasswordService implements OnModuleInit {
     async resetPassword(dto: ResetPasswordDto) {
         this.logger.debug({ message: "Password reset attempt" });
 
-        const user = await this.pg.query<{ id: string }>(
-            "SELECT id FROM users WHERE reset_token = $1",
-            [dto.token],
-        );
+        const userId =
+            await this.passwordResetRepository.findUserIdByResetToken(
+                dto.token,
+            );
 
-        if (!user || user.rows.length < 1) {
+        if (!userId) {
             this.logger.warn({
                 message: "Password reset rejected: token invalid or expired",
             });
@@ -189,24 +201,15 @@ export class PasswordService implements OnModuleInit {
 
         const newHash = await bcrypt.hash(dto.newPassword, 10);
 
-        await this.pg.withTransaction(async (client) => {
-            await client.query(
-                "UPDATE users SET password_hash = $1 where id = $2",
-                [newHash, user.rows[0].id],
-            );
-            await client.query(
-                "UPDATE users SET reset_token = NULL, reset_expires = NULL where id = $1",
-                [user.rows[0].id],
-            );
-            this.logger.log({
-                message: "Password updated",
-                userId: user.rows[0].id,
-            });
-        });
+        await this.passwordResetRepository.updatePasswordAndClearToken(
+            userId,
+            newHash,
+        );
+        this.logger.log({ message: "Password updated", userId });
 
         return {
             message: "Password updated successfully",
-            userId: user.rows[0].id,
+            userId,
         };
     }
 }
