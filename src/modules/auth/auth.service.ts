@@ -1,136 +1,165 @@
+import { maskEmail } from "../../common/logging/logger.js";
 import {
-  Injectable,
-  UnauthorizedException,
-  ConflictException,
-  Logger,
-  NotFoundException,
+    Injectable,
+    UnauthorizedException,
+    ConflictException,
+    Logger,
+    NotFoundException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
-import { RedisProvider } from "src/shared/infrastructure/cache/redis.provider.js";
-import { PostgresProvider } from "src/shared/infrastructure/database/postgres.provider.js";
 import { LoginDto, RegisterDto } from "./auth.dto.js";
+import { AuthRepository } from "./auth.repository.js";
+import type { JwtPayload } from "./auth.types.js";
 import { RedisBlacklistProvider } from "@/shared/infrastructure/cache/redis-blacklist.provider.js";
+import {
+    AttemptLimiter,
+    LOGIN_RULE,
+} from "@/shared/infrastructure/cache/attempt-limiter.js";
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
+    private readonly logger = new Logger(AuthService.name);
 
-  constructor(
-    private readonly pg: PostgresProvider,
-    private readonly jwtService: JwtService,
-    private readonly redis: RedisProvider,
-    private readonly blacklist: RedisBlacklistProvider,
-  ) {}
+    constructor(
+        private readonly authRepository: AuthRepository,
+        private readonly jwtService: JwtService,
+        private readonly blacklist: RedisBlacklistProvider,
+        private readonly attemptLimiter: AttemptLimiter,
+    ) {}
 
-  async register(dto: RegisterDto) {
-    this.logger.log(`Attempting to register user: ${dto.email}`);
+    async register(dto: RegisterDto) {
+        this.logger.debug({
+            message: "Registration attempt",
+            email: maskEmail(dto.email),
+        });
 
-    const existing = await this.pg.query(
-      "SELECT id FROM users WHERE email = $1 OR username = $2",
-      [dto.email, dto.username],
-    );
+        if (
+            await this.authRepository.existsByEmailOrUsername(
+                dto.email,
+                dto.username,
+            )
+        ) {
+            this.logger.warn({
+                message: "Registration rejected: account already exists",
+                email: maskEmail(dto.email),
+            });
+            throw new ConflictException("Account already exists");
+        }
 
-    if (existing.rows.length > 0) {
-      this.logger.warn(`Registration failed: Account already exists for ${dto.email}`);
-      throw new ConflictException("Account already exists");
+        const passwordHash = await bcrypt.hash(dto.password, 10);
+
+        const userId = await this.authRepository.createUser(
+            dto.username,
+            dto.email,
+            passwordHash,
+        );
+
+        this.logger.log({
+            message: "User registered",
+            userId: userId,
+        });
+        return {
+            message: "Success: Account Created",
+            userId: userId,
+        };
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    async login(dto: LoginDto) {
+        this.logger.debug({
+            message: "Login attempt",
+            email: maskEmail(dto.email),
+        });
 
-    const newUser = await this.pg.query<{ id: string }>(
-      "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
-      [dto.username, dto.email, passwordHash],
-    );
+        // Counted per email (hashed), checked before any bcrypt work.
+        const attemptId = AttemptLimiter.emailId(dto.email);
+        await this.attemptLimiter.assertAllowed(LOGIN_RULE, attemptId);
 
-    this.logger.log(`User successfully created with ID: ${newUser.rows[0].id}`);
-    return { message: "Success: Account Created", userId: newUser.rows[0].id };
-  }
+        // Unknown email and wrong password get the same 401 so the response
+        // doesn't reveal which accounts exist.
+        const user = await this.authRepository.findCredentialsByEmail(
+            dto.email,
+        );
+        if (
+            !user ||
+            !(await bcrypt.compare(dto.password, user.password_hash))
+        ) {
+            await this.attemptLimiter.recordFailure(LOGIN_RULE, attemptId);
+            this.logger.warn({
+                message: "Login failed: invalid credentials",
+                email: maskEmail(dto.email),
+            });
+            throw new UnauthorizedException("Invalid Credentials");
+        }
 
-  async login(dto: LoginDto) {
-    this.logger.log(`Login attempt for email: ${dto.email}`);
+        const payload: JwtPayload = {
+            sub: user.id,
+            username: user.username,
+            role: user.role,
+        };
 
-    const user = await this.pg.query<any>(
-      "SELECT id, username, email, password_hash, role FROM users WHERE email = $1",
-      [dto.email],
-    );
+        const expiresIn = user.role === "ADMIN" ? "1h" : "7d";
+        const token = this.jwtService.sign(payload, { expiresIn });
 
-    if (!user || !(await bcrypt.compare(dto.password, user.rows[0].password_hash))) {
-      this.logger.warn(`Failed login attempt for email: ${dto.email}`);
-      throw new UnauthorizedException("Invalid Credentials");
+        await this.attemptLimiter.reset(LOGIN_RULE, attemptId);
+
+        this.logger.log({
+            message: "User logged in",
+            userId: user.id,
+            role: user.role,
+        });
+
+        return {
+            user: {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+            },
+            access_token: token,
+        };
     }
 
-    const payload = { sub: user.rows[0].id, username: user.rows[0].username, role: user.rows[0].role };
+    async logout(token: string) {
+        this.logger.debug({ message: "Logout requested" });
+        const decoded = this.jwtService.decode<JwtPayload | null>(token);
 
-    const expiresIn = user.rows[0].role === "ADMIN" ? "1h" : "7d";
-    const token = this.jwtService.sign(payload, { expiresIn });
+        if (!decoded) {
+            this.logger.warn({ message: "Logout rejected: malformed token" });
+            return {
+                message: "Logout processed", // Avoid crashing if token is unparsable
+            };
+        }
 
-    await this.redis["client"].set(
-      `user:${user.rows[0].id}:session`,
-      token,
-      "EX",
-      86400,
-    );
+        const now = Math.floor(Date.now() / 1000);
+        const ttl = (decoded.exp ?? now) - now;
 
-    this.logger.log(`User ${user.rows[0].id} logged in successfully. Role: ${user.rows[0].role}`);
-    
-    return { 
-      user: {
-        id: user.rows[0].id,
-        username: user.rows[0].username,
-        email: user.rows[0].email,
-        role: user.rows[0].role
-      },
-      access_token: token 
-    };
-  }
+        if (ttl > 0) {
+            await this.blacklist.add({ token, ttl });
+            this.logger.log({
+                message: "User logged out; token blacklisted",
+                userId: decoded.sub,
+            });
+        }
 
-  async logout(token: string) {
-    this.logger.log('Logout request initiated')
-    const decoded = this.jwtService.decode(token) as { exp: number, sub: string };
-
-    if (!decoded) {
-      this.logger.warn('Logout attempted with an unparsable or malformed token');
-      return {
-        message: 'Logout processed'   // Avoid crashing if token is unparsable
-      };
+        return {
+            message: "Logged out and token revoked",
+        };
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const ttl = decoded.exp - now;
+    async findUserProfileById(userId: string) {
+        const user = await this.authRepository.findProfileById(userId);
 
-    if (ttl > 0) {
-      await this.blacklist.add({ token, ttl });
-      this.logger.log(`Token blacklisted for user: ${decoded.sub}`);
+        if (!user) {
+            this.logger.warn({
+                message: "Profile lookup failed: user not found",
+                userId,
+            });
+            throw new NotFoundException(
+                "The requested user session profile could not be located.",
+            );
+        }
+
+        return user;
     }
-
-    const userId = (decoded as any).sub;
-    await this.redis['client'].del(`user:${userId}:session`);
-
-    this.logger.debug(`Session cleared for user: ${userId}`);
-    return {
-      message: "Logged out and token revoked"
-    }
-  }
-
-  async findUserProfileById(userId: string) {
-    const query = `
-      SELECT 
-        id, 
-        username, 
-        email, 
-        role 
-      FROM public.users 
-      WHERE id = $1;
-    `;
-
-    const user = await this.pg.query<any>(query, [userId]);
-
-    if (!user || user.rows.length === 0) {
-      this.logger.error(`User not found`);
-      throw new NotFoundException('The requested user session profile could not be located.');
-    }
-
-    return user.rows[0];
-  }
 }

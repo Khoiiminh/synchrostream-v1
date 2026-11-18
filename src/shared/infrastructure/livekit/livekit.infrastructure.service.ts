@@ -8,7 +8,7 @@ export class LiveKitInfrastructureService {
 
     constructor(
         @Inject(LIVEKIT_CONFIG)
-        private readonly config: LiveKitConfig
+        private readonly config: LiveKitConfig,
     ) {
         this.api = new LiveKitAPI({
             host: this.getApiHost(),
@@ -17,26 +17,44 @@ export class LiveKitInfrastructureService {
         });
     }
 
-    public async createRoom (roomName: string, maxParticipants: number): Promise<Room> {
+    public async createRoom(
+        roomName: string,
+        maxParticipants: number,
+    ): Promise<Room> {
         return await this.api.room.createRoom({
             name: roomName,
             maxParticipants,
         });
     }
 
-    public async deleteRoom (roomName: string): Promise<void> {
+    public async deleteRoom(roomName: string): Promise<void> {
         await this.api.room.deleteRoom(roomName);
     }
 
-    public async listParticipants (roomName: string): Promise<ParticipantInfo[]> {
+    public async listParticipants(
+        roomName: string,
+    ): Promise<ParticipantInfo[]> {
         return await this.api.room.listParticipants(roomName);
     }
 
-    public async getParticipant (roomName: string, participantIdentity: string): Promise<ParticipantInfo> {
-        return await this.api.room.getParticipant(roomName, participantIdentity);
-    } 
+    public async removeParticipant(
+        roomName: string,
+        participantIdentity: string,
+    ): Promise<void> {
+        await this.api.room.removeParticipant(roomName, participantIdentity);
+    }
 
-    private getApiHost (): string {
+    public async getParticipant(
+        roomName: string,
+        participantIdentity: string,
+    ): Promise<ParticipantInfo> {
+        return await this.api.room.getParticipant(
+            roomName,
+            participantIdentity,
+        );
+    }
+
+    private getApiHost(): string {
         return this.config.url.replace(/^ws/, "http");
     }
 }

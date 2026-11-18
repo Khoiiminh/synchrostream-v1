@@ -1,6 +1,16 @@
 import { ApiProperty } from "@nestjs/swagger";
 import { IsUrl, IsUUID } from "class-validator";
 
+export class CreateMediaSessionDto {
+    @ApiProperty({
+        description:
+            "UUID of the watch room for which the media session is created",
+        format: "uuid",
+    })
+    @IsUUID()
+    roomId!: string;
+}
+
 export class MediaSessionConnectionDto {
     @ApiProperty({
         description: "UUID of the MediaSession.",
@@ -10,7 +20,8 @@ export class MediaSessionConnectionDto {
     mediaSessionId!: string;
 
     @ApiProperty({
-        description: "UUID of the participant authorized to join the MediaSession.",
+        description:
+            "UUID of the participant authorized to join the MediaSession.",
         format: "uuid",
     })
     @IsUUID()
@@ -33,7 +44,8 @@ export class MediaSessionConnectionDto {
     signalingEndpoint!: string;
 
     @ApiProperty({
-        description: "Short-lived JWT used by the browser to authenticate with the SFU signaling server.",
+        description:
+            "Short-lived JWT used by the browser to authenticate with the SFU signaling server.",
     })
     signalingToken!: string;
 }

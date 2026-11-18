@@ -17,7 +17,9 @@ export class SfuSignalingTokenService {
     ) {}
 
     generateToken(payload: SfuSignalingTokenPayload): string {
-        const secret = this.configService.get<string>("SFU_SIGNALING_JWT_SECRET");
+        const secret = this.configService.get<string>(
+            "SFU_SIGNALING_JWT_SECRET",
+        );
 
         if (!secret) {
             throw new Error(
@@ -25,12 +27,9 @@ export class SfuSignalingTokenService {
             );
         }
 
-        return this.jwtService.sign(
-            payload,
-            {
-                secret,
-                expiresIn: "5m",
-            },
-        );
+        return this.jwtService.sign(payload, {
+            secret,
+            expiresIn: "5m",
+        });
     }
 }

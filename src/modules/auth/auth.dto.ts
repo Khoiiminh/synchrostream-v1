@@ -1,10 +1,16 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, MaxLength, Matches } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import {
+    IsEmail,
+    IsNotEmpty,
+    IsString,
+    MinLength,
+    MaxLength,
+} from "class-validator";
+import { ApiProperty } from "@nestjs/swagger";
 
 export class RegisterDto {
     @ApiProperty({
-        description: 'The unique nickname for the account profile',
-        example: 'john_doe',
+        description: "The unique nickname for the account profile",
+        example: "john_doe",
         maxLength: 50,
     })
     @IsString()
@@ -13,9 +19,10 @@ export class RegisterDto {
     username!: string;
 
     @ApiProperty({
-        description: 'The valid email address used for communication and logins',
-        example: 'john.doe@example.com',
-        maxLength: 100
+        description:
+            "The valid email address used for communication and logins",
+        example: "john.doe@example.com",
+        maxLength: 100,
     })
     @IsEmail()
     @IsNotEmpty()
@@ -23,8 +30,8 @@ export class RegisterDto {
     email!: string;
 
     @ApiProperty({
-        description: 'Account secure password string (min 8 characters).',
-        example: 'SuperSecretP@ss123',
+        description: "Account secure password string (min 8 characters).",
+        example: "SuperSecretP@ss123",
         minLength: 8,
     })
     @IsString()
@@ -35,18 +42,18 @@ export class RegisterDto {
 
 export class LoginDto {
     @ApiProperty({
-        description: 'The registered user email address.',
-        example: 'john.doe@example.com',
-        maxLength: 100
+        description: "The registered user email address.",
+        example: "john.doe@example.com",
+        maxLength: 100,
     })
     @IsEmail()
     @IsNotEmpty()
     @MaxLength(100)
     email!: string;
-    
+
     @ApiProperty({
-        description: 'The corresponding profile password account string.',
-        example: 'SuperSecretP@ss123',
+        description: "The corresponding profile password account string.",
+        example: "SuperSecretP@ss123",
         minLength: 8,
     })
     @IsString()
