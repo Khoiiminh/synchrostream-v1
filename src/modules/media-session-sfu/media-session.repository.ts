@@ -9,46 +9,30 @@ import type {
     SfuNodeEndpointRow,
     SfuNodeRow,
 } from "./media-session.types.js";
+import { RoomAccessQuery } from "../watch-party/queries/room-access.query.js";
 
 /** SQL for `media_sessions` and the SFU node / room lookups around it. */
 @Injectable()
 export class MediaSessionRepository {
-    constructor(private readonly pg: PostgresProvider) {}
+    constructor(
+        private readonly pg: PostgresProvider,
+        /** Watch-party owns rooms and memberships; read through its contract. */
+        private readonly rooms: RoomAccessQuery,
+    ) {}
 
     // ---- rooms / participants ----
 
-    async findRoomActivity(
+    findRoomActivity(
         roomId: string,
     ): Promise<RoomActivityRow | undefined> {
-        const query = `SELECT
-             id, is_active
-            FROM public.rooms
-            WHERE id = $1`;
-
-        const result = await this.pg.query<RoomActivityRow>(query, [roomId]);
-        return result.rows[0];
+        return this.rooms.findRoomActivity(roomId);
     }
 
-    async findRoomParticipant(
+    findRoomParticipant(
         roomId: string,
         userId: string,
     ): Promise<RoomParticipantRow | undefined> {
-        const participantQuery = `
-            SELECT
-                rp.id AS participant_id,
-                rp.user_id,
-                rp.room_id
-            FROM public.room_participants rp
-            WHERE rp.room_id = $1
-            AND rp.user_id = $2
-            LIMIT 1
-        `;
-
-        const result = await this.pg.query<RoomParticipantRow>(
-            participantQuery,
-            [roomId, userId],
-        );
-        return result.rows[0];
+        return this.rooms.findRoomParticipant(roomId, userId);
     }
 
     // ---- media_sessions reads ----

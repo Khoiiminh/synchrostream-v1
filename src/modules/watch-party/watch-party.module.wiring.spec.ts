@@ -12,6 +12,10 @@ import { RoomChatRelay } from "./room-chat.relay.js";
 import { WatchPartyRepository } from "./infrastructure/persistence/watch-party.repository.js";
 import { RoomChatRepository } from "./infrastructure/persistence/room-chat.repository.js";
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
+import { RoomAccessQuery } from "./queries/room-access.query.js";
+import { MediaSessionEvents } from "./queries/media-session-events.js";
+import { LiveKitRepository } from "../livekit/livekit.repository.js";
+import { MediaSessionRepository } from "../media-session-sfu/media-session.repository.js";
 import {
     ATTEMPT_LIMITER,
     CHAT_STORE,
@@ -105,6 +109,23 @@ describe("WatchPartyModule wiring", () => {
 
         const relay = moduleRef.get(RoomChatRelay) as unknown as Record<string, unknown>;
         expect(relay.repository).toBe(moduleRef.get(CHAT_STORE));
+    });
+
+    it("LiveKit and media sessions reach watch-party tables only through its contract", () => {
+        const rooms = moduleRef.get(RoomAccessQuery, { strict: false });
+        const events = moduleRef.get(MediaSessionEvents, { strict: false });
+        const liveKitRepo = moduleRef.get(LiveKitRepository, { strict: false }) as unknown as Record<
+            string,
+            unknown
+        >;
+        const mediaRepo = moduleRef.get(MediaSessionRepository, { strict: false }) as unknown as Record<
+            string,
+            unknown
+        >;
+        expect(rooms).toBeInstanceOf(RoomAccessQuery);
+        expect(liveKitRepo.rooms).toBe(rooms);
+        expect(liveKitRepo.events).toBe(events);
+        expect(mediaRepo.rooms).toBe(rooms);
     });
 
     it("the gateway's realtime collaborators share one context with the bound ports", () => {

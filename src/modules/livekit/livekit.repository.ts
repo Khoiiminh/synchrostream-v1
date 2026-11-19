@@ -6,108 +6,65 @@ import type {
 } from "@/shared/infrastructure/database/sql-executor.js";
 import type { MediaSessionRow } from "../media-session-sfu/media-session.types.js";
 import type { ActiveParticipantRow, ActiveRoomRow } from "./livekit.types.js";
+import { RoomAccessQuery } from "../watch-party/queries/room-access.query.js";
+import { MediaSessionEvents } from "../watch-party/queries/media-session-events.js";
 
 /**
- * All SQL for LiveKit media-session lifecycle: room/membership checks and the
- * guarded `media_sessions` status transitions with their outbox events.
+ * LiveKit persistence: the guarded `media_sessions` status transitions. Room
+ * and membership checks and outbox events go through watch-party's contract
+ * (watch-party/queries), which owns those tables.
  *
  * Note: SQL text inside template literals is kept byte-for-byte identical to
  * the original service implementation, including continuation-line indentation.
  */
 @Injectable()
 export class LiveKitRepository {
-    constructor(private readonly pg: PostgresProvider) {}
+    constructor(
+        private readonly pg: PostgresProvider,
+        /** Watch-party owns rooms and memberships; LiveKit reads them through its contract. */
+        private readonly rooms: RoomAccessQuery,
+        /** Watch-party owns the lifecycle outbox; LiveKit enqueues through its contract. */
+        private readonly events: MediaSessionEvents,
+    ) {}
 
     withTransaction<T>(cb: (tx: TransactionClient) => Promise<T>): Promise<T> {
         return this.pg.withTransaction(cb);
     }
 
     /** Membership id of an active member of an ACTIVE room, if any. */
-    async findActiveMembershipId(
+    findActiveMembershipId(
         roomId: string,
         userId: string,
     ): Promise<string | undefined> {
-        const result = await this.pg.query<{ id: string }>(
-            `SELECT rp.id
-             FROM public.room_participants rp
-             INNER JOIN public.rooms r ON r.id = rp.room_id
-             WHERE rp.room_id = $1 AND rp.user_id = $2
-               AND rp.is_active = true AND r.lifecycle_status = 'ACTIVE'
-             LIMIT 1`,
-            [roomId, userId],
-        );
-        return result.rows[0]?.id;
+        return this.rooms.findActiveMembershipId(roomId, userId);
     }
 
     /** Whether the room exists and is ACTIVE (`SELECT 1` probe). */
-    async isRoomActive(roomId: string): Promise<boolean> {
-        const result = await this.pg.query(
-            `SELECT 1 FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE'`,
-            [roomId],
-        );
-        return Boolean(result.rows[0]);
+    isRoomActive(roomId: string): Promise<boolean> {
+        return this.rooms.isRoomActive(roomId);
     }
 
     /** Id of the room if it exists and is ACTIVE. */
-    async findActiveRoomId(roomId: string): Promise<string | undefined> {
-        const result = await this.pg.query<{ id: string }>(
-            `SELECT id FROM public.rooms WHERE id = $1 AND lifecycle_status = 'ACTIVE' LIMIT 1`,
-            [roomId],
-        );
-        return result.rows[0]?.id;
+    findActiveRoomId(roomId: string): Promise<string | undefined> {
+        return this.rooms.findActiveRoomId(roomId);
     }
 
     /** The active participant row for a user in an ACTIVE room, if any. */
-    async findActiveParticipant(
+    findActiveParticipant(
         roomId: string,
         userId: string,
     ): Promise<ActiveParticipantRow | undefined> {
-        const participantQuery = `
-            SELECT
-                rp.id AS participant_id,
-                rp.user_id,
-                rp.room_id
-            FROM public.room_participants rp
-            INNER JOIN public.rooms r ON r.id = rp.room_id
-            WHERE rp.room_id = $1
-            AND rp.user_id = $2
-            AND rp.is_active = true
-            AND r.lifecycle_status = 'ACTIVE'
-            LIMIT 1
-        `;
-
-        const result = await this.pg.query<ActiveParticipantRow>(
-            participantQuery,
-            [roomId, userId],
-        );
-        return result.rows[0];
+        return this.rooms.findActiveParticipant(roomId, userId);
     }
 
     /** The ACTIVE room with its capacity, if it exists. */
-    async findActiveRoom(roomId: string): Promise<ActiveRoomRow | undefined> {
-        const roomQuery = `
-            SELECT
-                id,
-                max_participants
-            FROM public.rooms
-            WHERE id = $1
-            AND lifecycle_status = 'ACTIVE'
-            LIMIT 1
-        `;
-
-        const result = await this.pg.query<ActiveRoomRow>(roomQuery, [roomId]);
-        return result.rows[0];
+    findActiveRoom(roomId: string): Promise<ActiveRoomRow | undefined> {
+        return this.rooms.findActiveRoom(roomId);
     }
 
     /** Locks the room row `FOR UPDATE` if ACTIVE; returns whether it was found. */
-    async lockActiveRoom(db: SqlExecutor, roomId: string): Promise<boolean> {
-        const result = await db.query(
-            `SELECT id FROM public.rooms
-                 WHERE id = $1 AND lifecycle_status = 'ACTIVE'
-                 FOR UPDATE`,
-            [roomId],
-        );
-        return Boolean(result.rows[0]);
+    lockActiveRoom(db: SqlExecutor, roomId: string): Promise<boolean> {
+        return this.rooms.lockActiveRoom(db, roomId);
     }
 
     /** Guarded CREATED -> STARTING transition. */
@@ -126,15 +83,11 @@ export class LiveKitRepository {
     }
 
     /** Enqueues a LIVEKIT_SESSION_RECONCILE event delayed past the startup window. */
-    async enqueueDelayedSessionReconcile(
+    enqueueDelayedSessionReconcile(
         db: SqlExecutor,
         mediaSessionId: string,
     ): Promise<void> {
-        await db.query(
-            `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id, next_attempt_at)
-                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1, NOW() + INTERVAL '35 seconds')`,
-            [mediaSessionId],
-        );
+        return this.events.enqueueDelayedSessionReconcile(db, mediaSessionId);
     }
 
     /** Guarded STARTING -> ACTIVE transition. */
@@ -169,14 +122,10 @@ export class LiveKitRepository {
     }
 
     /** Enqueues an immediately due LIVEKIT_SESSION_RECONCILE event. */
-    async enqueueSessionReconcile(
+    enqueueSessionReconcile(
         db: SqlExecutor,
         mediaSessionId: string,
     ): Promise<void> {
-        await db.query(
-            `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
-                 VALUES ('LIVEKIT_SESSION_RECONCILE', $1)`,
-            [mediaSessionId],
-        );
+        return this.events.enqueueSessionReconcile(db, mediaSessionId);
     }
 }
