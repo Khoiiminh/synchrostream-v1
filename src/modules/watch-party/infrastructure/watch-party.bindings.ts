@@ -2,7 +2,7 @@ import type { Provider } from "@nestjs/common";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { AttemptLimiter } from "@/shared/infrastructure/cache/attempt-limiter.js";
 import { LiveKitService } from "../../livekit/livekit.service.js";
-import { RoomLifecycleOutboxService } from "../room-lifecycle-outbox.service.js";
+import { RoomLifecycleOutboxService } from "./outbox/room-lifecycle-outbox.service.js";
 import { WatchPartyRepository } from "./persistence/watch-party.repository.js";
 import { RoomChatRepository } from "./persistence/room-chat.repository.js";
 import { BcryptPasswordHasher } from "./security/bcrypt-password-hasher.js";

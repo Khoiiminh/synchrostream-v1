@@ -7,7 +7,7 @@ import { WatchPartyController } from "./watch-party.controller.js";
 import { MediaSessionModule } from "../media-session-sfu/media-session.module.js";
 import { LiveKitApplicationModule } from "../livekit/livekit.module.js";
 import { AuthModule } from "../auth/auth.module.js";
-import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
+import { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import { RoomLifecycleOutboxRepository } from "./infrastructure/persistence/room-lifecycle-outbox.repository.js";
 import { WatchPartyRepository } from "./infrastructure/persistence/watch-party.repository.js";
 import { RoomChatRelay } from "./room-chat.relay.js";

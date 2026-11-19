@@ -6,7 +6,7 @@ import { WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyRepository } from "./infrastructure/persistence/watch-party.repository.js";
 import { RoomLifecycleOutboxRepository } from "./infrastructure/persistence/room-lifecycle-outbox.repository.js";
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
-import type { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
+import type { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import {
     connectTestPostgres,
     insertMovie,

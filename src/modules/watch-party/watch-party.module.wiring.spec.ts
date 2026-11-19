@@ -7,7 +7,7 @@ import { LiveKitService } from "../livekit/livekit.service.js";
 import { WatchPartyModule } from "./watch-party.module.js";
 import { WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyGateway } from "./watch-party.gateway.js";
-import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
+import { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import { RoomChatRelay } from "./room-chat.relay.js";
 import { WatchPartyRepository } from "./infrastructure/persistence/watch-party.repository.js";
 import { RoomChatRepository } from "./infrastructure/persistence/room-chat.repository.js";
@@ -69,18 +69,38 @@ describe("WatchPartyModule wiring", () => {
         expect(bound).toBe(moduleRef.get(adapter as never, { strict: false }));
     });
 
-    it("WatchPartyService receives the bound ports", () => {
-        const service = moduleRef.get(WatchPartyService) as unknown as Record<string, unknown>;
-        expect(service.repo).toBe(moduleRef.get(WATCH_PARTY_STORE));
-        expect(service.lifecycleOutbox).toBe(moduleRef.get(LIFECYCLE_OUTBOX));
-        expect(service.attemptLimiter).toBe(moduleRef.get(ATTEMPT_LIMITER, { strict: false }));
-        expect(service.passwords).toBe(moduleRef.get(PASSWORD_HASHER));
+    it("the facade's use cases receive the bound ports", () => {
+        // Since phase 3 WatchPartyService builds the use cases from its ports.
+        const service = moduleRef.get(WatchPartyService) as unknown as Record<
+            string,
+            Record<string, unknown>
+        >;
+        const store = moduleRef.get(WATCH_PARTY_STORE);
+        const outbox = moduleRef.get(LIFECYCLE_OUTBOX);
+        for (const useCase of ["createRoom", "joinRoom", "leaveRoom", "expireMembership"]) {
+            expect(service[useCase].repo).toBe(store);
+            expect(service[useCase].lifecycleOutbox).toBe(outbox);
+        }
+        expect(service.queries.repo).toBe(store);
+        expect(service.joinRoom.attemptLimiter).toBe(
+            moduleRef.get(ATTEMPT_LIMITER, { strict: false }),
+        );
+        expect(service.createRoom.passwords).toBe(moduleRef.get(PASSWORD_HASHER));
+        expect(service.joinRoom.passwords).toBe(moduleRef.get(PASSWORD_HASHER));
     });
 
     it("the outbox and chat relay receive their ports", () => {
-        const outbox = moduleRef.get(RoomLifecycleOutboxService) as unknown as Record<string, unknown>;
-        expect(outbox.redis).toBe(moduleRef.get(ROOM_STATE_PROJECTION, { strict: false }));
-        expect(outbox.liveKit).toBe(moduleRef.get(MEDIA_SESSION, { strict: false }));
+        // Since phase 3 the outbox worker builds its use cases from the ports.
+        const outbox = moduleRef.get(RoomLifecycleOutboxService) as unknown as Record<
+            string,
+            Record<string, unknown>
+        >;
+        const projection = moduleRef.get(ROOM_STATE_PROJECTION, { strict: false });
+        const media = moduleRef.get(MEDIA_SESSION, { strict: false });
+        expect(outbox.reconcileRoom.redis).toBe(projection);
+        expect(outbox.reconcileRoom.liveKit).toBe(media);
+        expect(outbox.processEvent.liveKit).toBe(media);
+        expect(outbox.processEvent.reconcileRoom).toBe(outbox.reconcileRoom);
 
         const relay = moduleRef.get(RoomChatRelay) as unknown as Record<string, unknown>;
         expect(relay.repository).toBe(moduleRef.get(CHAT_STORE));

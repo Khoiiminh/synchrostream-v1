@@ -7,7 +7,7 @@ import {
     RoomCodeConflict,
 } from "./application/ports/store-errors.js";
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
-import type { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
+import type { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import {
     JOIN_PASSWORD_RULE,
     type AttemptLimiter,
