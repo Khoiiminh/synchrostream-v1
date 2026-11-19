@@ -60,4 +60,21 @@ export class MediaTelemetryGateway
             hlsUrl,
         });
     }
+
+    /** Additive event: per-phase percentage while the worker transcodes. */
+    broadcastTranscodeProgress({
+        movieId,
+        phase,
+        percent,
+    }: {
+        movieId: string;
+        phase: "DOWNLOADING" | "ENCODING" | "UPLOADING";
+        percent: number;
+    }) {
+        this.server.emit("movie_transcode_progress", {
+            movieId,
+            phase,
+            percent,
+        });
+    }
 }

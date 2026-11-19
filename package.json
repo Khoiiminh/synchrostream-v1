@@ -13,12 +13,17 @@
     "start:dev": "nest start --watch -b swc",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "start:worker": "node dist/worker",
+    "start:worker:dev": "nest start --watch -b swc --entryFile worker",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:int": "jest --config ./test/jest-integration.json --runInBand",
+    "test:int:db": "node test/integration/test-db.mjs",
+    "test:int:db:stop": "node test/integration/test-db.mjs stop",
     "migrate:status": "node --env-file-if-exists=.env.development scripts/migrate.mjs status",
     "migrate:create": "node scripts/migrate.mjs create",
     "migrate:up": "node --env-file-if-exists=.env.development scripts/migrate.mjs up",
@@ -42,6 +47,7 @@
     "@smithy/node-http-handler": "^4.7.7",
     "@types/cookie-parser": "^1.4.10",
     "bcrypt": "^6.0.0",
+    "bullmq": "^6.7.8",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
@@ -103,7 +109,24 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "module": "commonjs",
+            "moduleResolution": "node",
+            "isolatedModules": true,
+            "verbatimModuleSyntax": false,
+            "resolvePackageJsonExports": false
+          }
+        }
+      ]
+    },
+    "moduleNameMapper": {
+      "^@/(.*)\\.js$": "<rootDir>/$1",
+      "^@/(.*)$": "<rootDir>/$1",
+      "^src/(.*)\\.js$": "<rootDir>/$1",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
