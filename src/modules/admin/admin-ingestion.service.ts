@@ -10,6 +10,7 @@ import {
 import { InitiateUploadDto } from "./admin.dto.js";
 import { AdminTranscodingService } from "./admin-transcoding.service.js";
 import { AdminRepository } from "./admin.repository.js";
+import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
 
 interface IngestionSession {
     uploadId: string;
@@ -28,6 +29,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
         private readonly adminRepository: AdminRepository,
         private readonly r2: CloudflareR2Provider,
         private readonly transcoding: AdminTranscodingService,
+        private readonly telemetryGateway: MediaTelemetryGateway,
     ) {}
 
     onModuleInit() {
@@ -138,6 +140,28 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                     "Failed to mark movie as FAILED after aborted ingestion",
                 movieId,
                 err: dbErr,
+            });
+        }
+    }
+
+    /**
+     * The upload itself succeeded, so a queue outage must not turn the
+     * response into an error (the old in-process trigger was fire-and-forget
+     * too). Instead the movie is marked FAILED and the admin UI is told.
+     */
+    private async enqueueTranscodeOrFail(movieId: string): Promise<void> {
+        try {
+            await this.transcoding.enqueueTranscode(movieId);
+        } catch (err) {
+            this.logger.error({
+                message: "Post-upload transcode enqueue failed",
+                movieId,
+                err,
+            });
+            await this.markIngestionAsFailed(movieId);
+            this.telemetryGateway.broadcastMovieStatusUpdate({
+                movieId,
+                status: "FAILED",
             });
         }
     }
@@ -304,22 +328,7 @@ export class AdminIngestionService implements OnModuleInit, OnModuleDestroy {
                 movieId,
                 objectKey: session.objectKey,
             });
-            this.logger.log({
-                message: "Triggering transcode after upload",
-                movieId,
-            });
-
-            setTimeout(() => {
-                this.transcoding
-                    .initiateBackgroundTranscode(movieId)
-                    .catch((err: unknown) => {
-                        this.logger.error({
-                            message: "Post-upload transcode trigger failed",
-                            movieId,
-                            err,
-                        });
-                    });
-            }, 2500);
+            await this.enqueueTranscodeOrFail(movieId);
 
             return {
                 message: `Mezzanine master file successfully consolidated on storage bucket. Background multi-variant HLS encoding matrix initialized for Movie ID: ${movieId}.`,
