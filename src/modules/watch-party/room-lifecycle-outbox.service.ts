@@ -1,13 +1,22 @@
-import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import {
+    Inject,
     Injectable,
     Logger,
     OnModuleDestroy,
     OnModuleInit,
 } from "@nestjs/common";
-import { LiveKitService } from "../livekit/livekit.service.js";
-import type { TransactionClient } from "@/shared/infrastructure/database/sql-executor.js";
-import { RoomLifecycleOutboxRepository } from "./room-lifecycle-outbox.repository.js";
+import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
+import { RoomLifecycleOutboxRepository } from "./infrastructure/persistence/room-lifecycle-outbox.repository.js";
+import type { Tx } from "./application/ports/transaction.js";
+import type {
+    LifecycleOutboxPort,
+    MediaSessionPort,
+    RoomStateProjectionPort,
+} from "./application/ports/collaborators.port.js";
+import {
+    MEDIA_SESSION,
+    ROOM_STATE_PROJECTION,
+} from "./application/ports/tokens.js";
 import type {
     OutboxEvent,
     RoomProjectionRow as RoomProjection,
@@ -29,7 +38,7 @@ const SWEEP_INTERVAL_MS = 60_000;
 
 @Injectable()
 export class RoomLifecycleOutboxService
-    implements OnModuleInit, OnModuleDestroy
+    implements OnModuleInit, OnModuleDestroy, LifecycleOutboxPort
 {
     private readonly logger = new Logger(RoomLifecycleOutboxService.name);
     private timer?: NodeJS.Timeout;
@@ -40,8 +49,10 @@ export class RoomLifecycleOutboxService
 
     constructor(
         private readonly repo: RoomLifecycleOutboxRepository,
-        private readonly redis: RedisProvider,
-        private readonly liveKit: LiveKitService,
+        // Field names kept from before the ports, so the reconcile code is unchanged.
+        @Inject(ROOM_STATE_PROJECTION)
+        private readonly redis: RoomStateProjectionPort,
+        @Inject(MEDIA_SESSION) private readonly liveKit: MediaSessionPort,
     ) {}
 
     onModuleInit(): void {
@@ -66,11 +77,9 @@ export class RoomLifecycleOutboxService
     }
 
     /** Inside the caller's transaction: enqueue a reconciliation of one room. */
-    async enqueueRoomReconciliation(
-        client: TransactionClient,
-        roomId: string,
-    ): Promise<void> {
-        await this.repo.enqueueRoomReconciliation(client, roomId);
+    async enqueueRoomReconciliation(tx: Tx, roomId: string): Promise<void> {
+        // The Tx came from the Postgres store, so it is a pg client.
+        await this.repo.enqueueRoomReconciliation(tx as SqlExecutor, roomId);
     }
 
     /** Outside a transaction: request a durable reconciliation of one room. */

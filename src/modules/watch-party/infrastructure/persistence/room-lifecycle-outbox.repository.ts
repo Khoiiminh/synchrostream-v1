@@ -9,7 +9,7 @@ import type {
     OutboxEvent,
     RoomCodeHolderRow,
     RoomProjectionRow,
-} from "./watch-party.types.js";
+} from "../../watch-party.types.js";
 
 /**
  * All SQL for the room lifecycle outbox, its sweeper and room reconciliation.

@@ -1,10 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import type { ChatHistoryRow, InsertedChatRow } from "./watch-party.types.js";
+import type { ChatHistoryRow, InsertedChatRow } from "../../watch-party.types.js";
+import type { ChatStore } from "../../application/ports/collaborators.port.js";
 
-/** All SQL for `chat_history`. Rows are scoped to one room generation (`room_id`). */
+/**
+ * All SQL for `chat_history` (the ChatStore adapter). Rows are scoped to one
+ * room generation (`room_id`).
+ */
 @Injectable()
-export class RoomChatRepository {
+export class RoomChatRepository implements ChatStore {
     constructor(private readonly pg: PostgresProvider) {}
 
     async insertMessage(params: {

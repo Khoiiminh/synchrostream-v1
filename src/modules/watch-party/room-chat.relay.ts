@@ -1,10 +1,12 @@
 import {
+    Inject,
     Injectable,
     Logger,
     OnModuleDestroy,
     OnModuleInit,
 } from "@nestjs/common";
-import { RoomChatRepository } from "./room-chat.repository.js";
+import type { ChatStore } from "./application/ports/collaborators.port.js";
+import { CHAT_STORE } from "./application/ports/tokens.js";
 import {
     CHAT_HISTORY_LIMIT,
     CHAT_RATE_RULE,
@@ -14,7 +16,7 @@ import {
     normalizeClientMessageId,
     toSenderNameAtTime,
     type ChatRateWindow,
-} from "./room-chat.policy.js";
+} from "./domain/chat-policy.js";
 import type { ChatMessagePayload, ChatSendAck } from "./watch-party.types.js";
 
 /** How often expired rate windows are dropped. */
@@ -40,7 +42,7 @@ export class RoomChatRelay implements OnModuleInit, OnModuleDestroy {
 
     #pruneTimer?: NodeJS.Timeout;
 
-    constructor(private readonly repository: RoomChatRepository) {}
+    constructor(@Inject(CHAT_STORE) private readonly repository: ChatStore) {}
 
     onModuleInit(): void {
         this.#pruneTimer = setInterval(

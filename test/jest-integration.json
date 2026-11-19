@@ -1,7 +1,13 @@
 {
   "rootDir": "..",
-  "roots": ["<rootDir>/src"],
-  "moduleFileExtensions": ["js", "json", "ts"],
+  "roots": [
+    "<rootDir>/src"
+  ],
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
   "testRegex": "\\.int-spec\\.ts$",
   "transform": {
     "^.+\\.ts$": [
@@ -20,6 +26,7 @@
   "moduleNameMapper": {
     "^@/(.*)\\.js$": "<rootDir>/src/$1",
     "^@/(.*)$": "<rootDir>/src/$1",
+    "^src/(.*)\\.js$": "<rootDir>/src/$1",
     "^(\\.{1,2}/.*)\\.js$": "$1"
   },
   "globalSetup": "<rootDir>/test/integration/global-setup.cjs",

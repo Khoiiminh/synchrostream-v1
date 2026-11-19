@@ -5,7 +5,7 @@ import {
     normalizeChatMessage,
     normalizeClientMessageId,
     toSenderNameAtTime,
-} from "./room-chat.policy.js";
+} from "./chat-policy.js";
 
 describe("normalizeChatMessage", () => {
     it("trims and keeps newlines", () => {

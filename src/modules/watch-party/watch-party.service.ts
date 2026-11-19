@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
@@ -12,14 +12,24 @@ import {
     Max,
     Min,
 } from "class-validator";
-import * as bcrypt from "bcrypt";
-import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
-import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
-import { WatchPartyRepository } from "./watch-party.repository.js";
+import { JOIN_PASSWORD_RULE } from "@/shared/infrastructure/cache/attempt-limiter.js";
+import type { WatchPartyStore } from "./application/ports/watch-party-store.port.js";
+import type { Tx } from "./application/ports/transaction.js";
+import type {
+    AttemptLimiterPort,
+    LifecycleOutboxPort,
+    PasswordHasher,
+} from "./application/ports/collaborators.port.js";
 import {
-    AttemptLimiter,
-    JOIN_PASSWORD_RULE,
-} from "@/shared/infrastructure/cache/attempt-limiter.js";
+    ActiveMembershipConflict,
+    RoomCodeConflict,
+} from "./application/ports/store-errors.js";
+import {
+    ATTEMPT_LIMITER,
+    LIFECYCLE_OUTBOX,
+    PASSWORD_HASHER,
+    WATCH_PARTY_STORE,
+} from "./application/ports/tokens.js";
 import {
     AlreadyInActiveRoom,
     MemberOfAnotherRoom,
@@ -51,14 +61,6 @@ import { withHttpErrors } from "./presentation/error-mapper.js";
 // Re-exported: the DTOs below and existing importers read them from here.
 export { ROOM_PASSWORD_MAX_LENGTH, ROOM_PASSWORD_MIN_LENGTH };
 
-/** Same cost factor as user passwords (auth and password-reset). */
-const ROOM_PASSWORD_BCRYPT_ROUNDS = 10;
-
-/** Postgres unique violation on the given index, as raised by `pg`. */
-function isUniqueViolation(error: unknown, constraint: string): boolean {
-    const pgError = error as { code?: string; constraint?: string } | null;
-    return pgError?.code === "23505" && pgError.constraint === constraint;
-}
 
 export class CreateRoomDto {
     @ApiProperty({
@@ -138,9 +140,12 @@ export class WatchPartyService {
     private readonly logger = new Logger(WatchPartyService.name);
 
     constructor(
-        private readonly repo: WatchPartyRepository,
-        private readonly lifecycleOutbox: RoomLifecycleOutboxService,
-        private readonly attemptLimiter: AttemptLimiter,
+        @Inject(WATCH_PARTY_STORE) private readonly repo: WatchPartyStore,
+        @Inject(LIFECYCLE_OUTBOX)
+        private readonly lifecycleOutbox: LifecycleOutboxPort,
+        @Inject(ATTEMPT_LIMITER)
+        private readonly attemptLimiter: AttemptLimiterPort,
+        @Inject(PASSWORD_HASHER) private readonly passwords: PasswordHasher,
     ) {}
 
     /**
@@ -195,11 +200,8 @@ export class WatchPartyService {
         // Enforced here as well as on the DTO, so every caller is covered.
         assertUsableRoomPassword(p.dto.passwordPlain);
 
-        // Hash once, outside the transaction, so no lock is held while bcrypt runs.
-        const passwordHash = await bcrypt.hash(
-            p.dto.passwordPlain,
-            ROOM_PASSWORD_BCRYPT_ROUNDS,
-        );
+        // Hash once, outside the transaction, so no lock is held while hashing runs.
+        const passwordHash = await this.passwords.hash(p.dto.passwordPlain);
 
         // An active room must be terminated through the gateway lifecycle first.
         // The advisory transaction lock serializes room creation for one owner,
@@ -311,7 +313,7 @@ export class WatchPartyService {
                     lifecycleStatus,
                 };
             } catch (error) {
-                if (isUniqueViolation(error, "idx_one_active_room_per_user")) {
+                if (error instanceof ActiveMembershipConflict) {
                     // A concurrent join committed first; report which room, so the
                     // client can offer to switch.
                     const currentRoom = await this.findCurrentRoom(
@@ -322,7 +324,7 @@ export class WatchPartyService {
                         ? this.membershipElsewhereConflict(currentRoom)
                         : new AlreadyInActiveRoom("create");
                 }
-                if (isUniqueViolation(error, "idx_active_room_code")) {
+                if (error instanceof RoomCodeConflict) {
                     if (
                         shouldRetryRoomCode({
                             requestedCode: requestedRoomCode,
@@ -468,7 +470,7 @@ export class WatchPartyService {
                         );
 
                         if (
-                            !(await bcrypt.compare(
+                            !(await this.passwords.compare(
                                 p.dto.passwordPlain,
                                 room.password,
                             ))
@@ -604,7 +606,7 @@ export class WatchPartyService {
 
             return result;
         } catch (error: unknown) {
-            if (isUniqueViolation(error, "idx_one_active_room_per_user")) {
+            if (error instanceof ActiveMembershipConflict) {
                 this.logger.warn({
                     message:
                         "Join rejected: User already has an active room membership",
@@ -936,7 +938,7 @@ export class WatchPartyService {
      * `excludeRoomId` skips the room being joined.
      */
     private async findCurrentRoom(
-        executor: SqlExecutor | undefined,
+        executor: Tx | undefined,
         userId: string,
         excludeRoomId?: string,
     ): Promise<{ roomId: string; roomCode: string; isOwner: boolean } | null> {

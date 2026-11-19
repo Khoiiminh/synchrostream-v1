@@ -1,7 +1,12 @@
 import { HttpException, HttpStatus, Logger } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import { WatchPartyService } from "./watch-party.service.js";
-import type { WatchPartyRepository } from "./watch-party.repository.js";
+import type { WatchPartyStore } from "./application/ports/watch-party-store.port.js";
+import {
+    ActiveMembershipConflict,
+    RoomCodeConflict,
+} from "./application/ports/store-errors.js";
+import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
 import type { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 import {
     JOIN_PASSWORD_RULE,
@@ -87,9 +92,10 @@ function setup() {
         reset: jest.fn(),
     };
     const service = new WatchPartyService(
-        repo as unknown as WatchPartyRepository,
+        repo as unknown as WatchPartyStore,
         outbox as unknown as RoomLifecycleOutboxService,
         limiter as unknown as AttemptLimiter,
+        new BcryptPasswordHasher(),
     );
     return { service, repo, outbox, limiter };
 }
@@ -107,11 +113,22 @@ async function contractOf(promise: Promise<unknown>) {
     throw new Error("Expected the call to throw an HttpException");
 }
 
+/**
+ * What the store reports for a unique violation on `constraint`. Since phase 2
+ * the Postgres repository translates the driver error itself (covered end to
+ * end by watch-party.service.int-spec.ts), so the mocked store throws the
+ * translated conflict.
+ */
 function pgUniqueViolation(constraint: string) {
-    return Object.assign(new Error("duplicate key"), {
+    const cause = Object.assign(new Error("duplicate key"), {
         code: "23505",
         constraint,
     });
+    if (constraint === "idx_active_room_code") return new RoomCodeConflict({ cause });
+    if (constraint === "idx_one_active_room_per_user") {
+        return new ActiveMembershipConflict({ cause });
+    }
+    throw new Error(`No store conflict for ${constraint}`);
 }
 
 function liveRoom(overrides: Record<string, unknown> = {}) {
