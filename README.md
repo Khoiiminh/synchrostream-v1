@@ -44,6 +44,31 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
+### Transcode worker
+
+Video transcoding (ffmpeg) runs in a separate process, not in the API. After
+`POST /v1/admin/media/complete`, the API only enqueues a BullMQ job
+(`media-transcode` queue on `REDIS_URL`). Start the worker next to the API, or
+uploaded movies stay `PROCESSING`:
+
+```bash
+# watch mode
+$ npm run start:worker:dev
+
+# production (after npm run build)
+$ npm run start:worker
+```
+
+The worker publishes status and progress on the Redis channel
+`media:transcode:telemetry`. The API relays them on the `/telemetry` socket
+namespace as `movie_status_changed` (unchanged) and `movie_transcode_progress`
+(`{ movieId, phase: DOWNLOADING|ENCODING|UPLOADING, percent }`).
+
+Worker env vars: `REDIS_URL`, `DATABASE_URL`, the R2 settings,
+`TRANSCODE_TEMP_DIR`, `TRANSCODE_CONCURRENCY` (default 1) and
+`TRANSCODE_MAX_ATTEMPTS` (default 3, exponential backoff from 30 s). The
+movie is marked `FAILED` only after the last attempt.
+
 ## Run tests
 
 ```bash

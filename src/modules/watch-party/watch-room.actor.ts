@@ -1,4 +1,15 @@
-import { BadRequestException, Logger } from "@nestjs/common";
+import { Logger } from "@nestjs/common";
+import { hasCapacity } from "./domain/membership.js";
+import {
+    applyPlaybackCommand,
+    initialPlaybackState,
+    type PlaybackAction,
+    type PlaybackState,
+} from "./domain/playback.js";
+import { PlaybackNotPermitted, RoomFull } from "./domain/errors.js";
+import { toHttpException } from "./presentation/error-mapper.js";
+
+export type { PlaybackState };
 
 export interface ParticipantNode {
     participantId: string;
@@ -7,22 +18,14 @@ export interface ParticipantNode {
     latencyScore: number;
 }
 
-export interface PlaybackState {
-    playhead: number;
-    status: "PLAYING" | "PAUSED";
-    lastUpdated: number;
-}
-
 // The actor is runtime state. PostgreSQL is persistence. Redis is shared runtime projection.
+// Rules live in domain/; the actor still throws HTTP exceptions because the
+// gateway's retryable/ack logic reads them (moves to the gateway in phase 4).
 
 export class WatchRoomActor {
     private readonly logger = new Logger(WatchRoomActor.name);
     private readonly participants = new Map<string, ParticipantNode>();
-    private playbackState: PlaybackState = {
-        playhead: 0,
-        status: "PAUSED",
-        lastUpdated: Date.now(),
-    };
+    private playbackState: PlaybackState = initialPlaybackState(Date.now());
 
     // Media readiness is independent of watch-room admission: the actor may exist
     // before LiveKit is available, and the session may be replaced after recovery.
@@ -68,9 +71,13 @@ export class WatchRoomActor {
     public registerParticipant(node: ParticipantNode): void {
         const existingParticipant = this.participants.has(node.userId);
 
+        // A reconnecting member keeps their slot even when the room is full.
         if (
             !existingParticipant &&
-            this.participants.size >= this.maxParticipants
+            !hasCapacity({
+                activeCount: this.participants.size,
+                capacity: this.maxParticipants,
+            })
         ) {
             this.logger.warn({
                 message:
@@ -81,9 +88,7 @@ export class WatchRoomActor {
                 userId: node.userId,
             });
 
-            throw new BadRequestException(
-                `Room capacity overflow limit reached. Cap: ${this.maxParticipants}`,
-            );
+            throw toHttpException(new RoomFull(this.maxParticipants));
         }
 
         this.participants.set(node.userId, node);
@@ -99,12 +104,18 @@ export class WatchRoomActor {
 
     public synchronizePlayback(p: {
         requestingId: string;
-        action: "PLAY" | "PAUSE" | "SEEK";
+        action: PlaybackAction;
         targetPlayhead: number;
     }): PlaybackState {
-        const isOwner = p.requestingId === this.ownerId;
+        try {
+            this.playbackState = applyPlaybackCommand(this.playbackState, {
+                ...p,
+                ownerId: this.ownerId,
+                now: Date.now(),
+            });
+        } catch (error) {
+            if (!(error instanceof PlaybackNotPermitted)) throw error;
 
-        if (!isOwner) {
             this.logger.warn({
                 message:
                     "Playback command rejected: only the room owner has playback authority",
@@ -114,21 +125,8 @@ export class WatchRoomActor {
                 action: p.action,
             });
 
-            throw new BadRequestException(
-                "Playback control rejected: only the room owner can control playback.",
-            );
+            throw toHttpException(error);
         }
-
-        this.playbackState = {
-            playhead: p.targetPlayhead,
-            status:
-                p.action === "PLAY"
-                    ? "PLAYING"
-                    : p.action === "PAUSE"
-                      ? "PAUSED"
-                      : this.playbackState.status,
-            lastUpdated: Date.now(),
-        };
 
         return {
             ...this.playbackState,

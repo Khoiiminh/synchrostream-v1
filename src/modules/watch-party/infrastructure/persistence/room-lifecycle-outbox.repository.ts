@@ -1,15 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import type {
-    SqlExecutor,
-    TransactionClient,
-} from "@/shared/infrastructure/database/sql-executor.js";
+import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
+import type { Tx } from "../../application/ports/transaction.js";
+import type { OutboxStore } from "../../application/ports/outbox-store.port.js";
 import type {
     IdRow,
     OutboxEvent,
     RoomCodeHolderRow,
     RoomProjectionRow,
-} from "./watch-party.types.js";
+} from "../../watch-party.types.js";
 
 /**
  * All SQL for the room lifecycle outbox, its sweeper and room reconciliation.
@@ -18,17 +17,23 @@ import type {
  * `undefined` runs the statement on the pool.
  */
 @Injectable()
-export class RoomLifecycleOutboxRepository {
+export class RoomLifecycleOutboxRepository implements OutboxStore {
     constructor(private readonly pg: PostgresProvider) {}
 
-    withTransaction<T>(cb: (tx: TransactionClient) => Promise<T>): Promise<T> {
-        return this.pg.withTransaction(cb);
+    withTransaction<T>(work: (tx: Tx) => Promise<T>): Promise<T> {
+        return this.pg.withTransaction(work);
+    }
+
+    /** The one place a port Tx becomes a pg executor; undefined means the pool. */
+    private executor(tx: Tx | undefined): SqlExecutor {
+        return (tx as SqlExecutor | undefined) ?? this.pg;
     }
 
     async enqueueRoomReconciliation(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         roomId: string,
     ): Promise<void> {
+        const db = this.executor(tx);
         await db.query(
             `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
              VALUES ('ROOM_RECONCILE', $1)`,
@@ -38,10 +43,11 @@ export class RoomLifecycleOutboxRepository {
 
     /** Leases the oldest due event (or one whose lease expired) to `workerId`. */
     async claimNextEvent(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         workerId: string,
         leaseSeconds: number,
     ): Promise<OutboxEvent | null> {
+        const db = this.executor(tx);
         const claimed = await db.query<OutboxEvent>(
             `WITH next_event AS (
                     SELECT event_id
@@ -95,7 +101,8 @@ export class RoomLifecycleOutboxRepository {
     }
 
     /** Transaction-scoped advisory lock so one instance sweeps per tick. */
-    async tryAcquireSweeperLock(db: SqlExecutor = this.pg): Promise<boolean> {
+    async tryAcquireSweeperLock(tx: Tx | undefined): Promise<boolean> {
+        const db = this.executor(tx);
         const lock = await db.query<{ acquired: boolean }>(
             `SELECT pg_try_advisory_xact_lock(hashtext('room-lifecycle-sweeper')) AS acquired`,
         );
@@ -104,9 +111,10 @@ export class RoomLifecycleOutboxRepository {
 
     /** Moves PROVISIONING rooms older than the timeout to TERMINATING; returns their ids. */
     async terminateTimedOutProvisioningRooms(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         timeoutMinutes: number,
     ): Promise<IdRow[]> {
+        const db = this.executor(tx);
         const timedOut = await db.query<IdRow>(
             `WITH stuck AS (
                         SELECT id FROM public.rooms
@@ -126,9 +134,10 @@ export class RoomLifecycleOutboxRepository {
     }
 
     async deactivateActiveParticipants(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         roomId: string,
     ): Promise<void> {
+        const db = this.executor(tx);
         await db.query(
             `UPDATE public.room_participants
                          SET is_active = false, left_at = NOW()
@@ -138,9 +147,8 @@ export class RoomLifecycleOutboxRepository {
     }
 
     /** Enqueues ROOM_RECONCILE for transitional rooms with no live event; returns rowCount. */
-    async requeueUnconvergedRooms(
-        db: SqlExecutor = this.pg,
-    ): Promise<number | null> {
+    async requeueUnconvergedRooms(tx: Tx | undefined): Promise<number | null> {
+        const db = this.executor(tx);
         const requeued =
             await db.query(`INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
                      SELECT 'ROOM_RECONCILE', r.id
@@ -158,9 +166,10 @@ export class RoomLifecycleOutboxRepository {
 
     /** Enqueues LIVEKIT_SESSION_RECONCILE for stuck media sessions with no live event; returns rowCount. */
     async requeueStuckMediaSessions(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         stuckMinutes: number,
     ): Promise<number | null> {
+        const db = this.executor(tx);
         const requeued = await db.query(
             `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)
                      SELECT 'LIVEKIT_SESSION_RECONCILE', ms.id
@@ -185,9 +194,10 @@ export class RoomLifecycleOutboxRepository {
 
     /** Deletes up to 1000 COMPLETED events older than the retention; returns rowCount. */
     async pruneCompletedEvents(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         retentionDays: number,
     ): Promise<number | null> {
+        const db = this.executor(tx);
         const pruned = await db.query(
             `DELETE FROM public.room_lifecycle_outbox
                      WHERE event_id IN (
@@ -217,10 +227,11 @@ export class RoomLifecycleOutboxRepository {
 
     /** PROVISIONING -> ACTIVE, guarded by the observed state version; returns rowCount. */
     async activateProvisioningRoom(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         roomId: string,
         stateVersion: string,
     ): Promise<number | null> {
+        const db = this.executor(tx);
         const activated = await db.query(
             `UPDATE public.rooms
                      SET lifecycle_status = 'ACTIVE', is_active = true,
@@ -234,10 +245,11 @@ export class RoomLifecycleOutboxRepository {
 
     /** TERMINATING -> TERMINATED, guarded by the observed state version; returns rowCount. */
     async markRoomTerminated(
-        db: SqlExecutor = this.pg,
+        tx: Tx | undefined,
         roomId: string,
         stateVersion: string,
     ): Promise<number | null> {
+        const db = this.executor(tx);
         const terminated = await db.query(
             `UPDATE public.rooms
                      SET lifecycle_status = 'TERMINATED', state_version = state_version + 1
