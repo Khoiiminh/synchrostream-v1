@@ -1,11 +1,4 @@
-import {
-    BadRequestException,
-    ConflictException,
-    Injectable,
-    Logger,
-    NotFoundException,
-    ServiceUnavailableException,
-} from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { ApiProperty } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
@@ -20,7 +13,6 @@ import {
     Min,
 } from "class-validator";
 import * as bcrypt from "bcrypt";
-import { randomInt } from "node:crypto";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 import type { SqlExecutor } from "@/shared/infrastructure/database/sql-executor.js";
 import { WatchPartyRepository } from "./watch-party.repository.js";
@@ -28,33 +20,44 @@ import {
     AttemptLimiter,
     JOIN_PASSWORD_RULE,
 } from "@/shared/infrastructure/cache/attempt-limiter.js";
+import {
+    AlreadyInActiveRoom,
+    MemberOfAnotherRoom,
+    OwnerAlreadyHasRoom,
+    RoomCodeTaken,
+    RoomNotAcceptingParticipants,
+    WrongRoomPassword,
+} from "./domain/errors.js";
+import {
+    ROOM_PASSWORD_MAX_LENGTH,
+    ROOM_PASSWORD_MIN_LENGTH,
+    assertUsableRoomPassword,
+} from "./domain/room-password.js";
+import {
+    generateRoomCode,
+    normalizeRoomCode,
+    shouldRetryRoomCode,
+} from "./domain/room-code.js";
+import {
+    assertJoinIdentity,
+    assertJoinPasswordPresent,
+    assertRoomHasCapacity,
+    assertRoomJoinable,
+    isJoinPasswordRequired,
+} from "./domain/membership.js";
+import { acceptsParticipants, isShuttingDown } from "./domain/room.js";
+import { withHttpErrors } from "./presentation/error-mapper.js";
 
-const ROOM_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-const ROOM_CODE_GENERATION_ATTEMPTS = 5;
+// Re-exported: the DTOs below and existing importers read them from here.
+export { ROOM_PASSWORD_MAX_LENGTH, ROOM_PASSWORD_MIN_LENGTH };
+
 /** Same cost factor as user passwords (auth and password-reset). */
 const ROOM_PASSWORD_BCRYPT_ROUNDS = 10;
-/**
- * Every room has its own password; there are no open rooms. An empty password
- * would hash to a valid bcrypt value that a blank join (or an invite link with
- * no password) then matches, so it is rejected at creation and at join.
- */
-export const ROOM_PASSWORD_MIN_LENGTH = 4;
-export const ROOM_PASSWORD_MAX_LENGTH = 64;
 
-function isUsableRoomPassword(value: unknown): value is string {
-    return (
-        typeof value === "string" &&
-        value.trim().length >= ROOM_PASSWORD_MIN_LENGTH &&
-        value.length <= ROOM_PASSWORD_MAX_LENGTH
-    );
-}
-
-function generateRoomCode(): string {
-    let code = "";
-    for (let index = 0; index < 6; index += 1) {
-        code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)];
-    }
-    return code;
+/** Postgres unique violation on the given index, as raised by `pg`. */
+function isUniqueViolation(error: unknown, constraint: string): boolean {
+    const pgError = error as { code?: string; constraint?: string } | null;
+    return pgError?.code === "23505" && pgError.constraint === constraint;
 }
 
 export class CreateRoomDto {
@@ -176,20 +179,21 @@ export class WatchPartyService {
      * @throws {Error} Throws if database queries fail or if Redis synchronization and its subsequent compensation fail.
      */
     async createRoomSession(p: { dto: CreateRoomDto; ownerId: string }) {
+        return withHttpErrors(() => this.createRoom(p));
+    }
+
+    private async createRoom(p: { dto: CreateRoomDto; ownerId: string }) {
         this.logger.debug({
             message: "Initiating session generation sequence for watch room",
             ownerId: p.ownerId,
             movieId: p.dto.movieId,
         });
 
-        const requestedRoomCode = p.dto.roomCode?.trim().toUpperCase();
+        const requestedRoomCode =
+            p.dto.roomCode == null ? undefined : normalizeRoomCode(p.dto.roomCode);
 
         // Enforced here as well as on the DTO, so every caller is covered.
-        if (!isUsableRoomPassword(p.dto.passwordPlain)) {
-            throw new BadRequestException(
-                `A room password of ${ROOM_PASSWORD_MIN_LENGTH}-${ROOM_PASSWORD_MAX_LENGTH} characters is required.`,
-            );
-        }
+        assertUsableRoomPassword(p.dto.passwordPlain);
 
         // Hash once, outside the transaction, so no lock is held while bcrypt runs.
         const passwordHash = await bcrypt.hash(
@@ -223,15 +227,10 @@ export class WatchPartyService {
                         );
 
                         if (existingRoom) {
-                            throw new ConflictException({
-                                message: `You already have an active room (${existingRoom.room_code}). Close it before creating another room.`,
-                                error: {
-                                    code: "ACTIVE_OWNER_ROOM",
-                                    roomId: existingRoom.id,
-                                    roomCode: existingRoom.room_code,
-                                    isOwner: true,
-                                },
-                            });
+                            throw new OwnerAlreadyHasRoom(
+                                existingRoom.id,
+                                existingRoom.room_code,
+                            );
                         }
 
                         // Clear memberships only after their owning room has fully terminated.
@@ -312,11 +311,7 @@ export class WatchPartyService {
                     lifecycleStatus,
                 };
             } catch (error) {
-                const pgError = error as { code?: string; constraint?: string };
-                if (
-                    pgError.code === "23505" &&
-                    pgError.constraint === "idx_one_active_room_per_user"
-                ) {
+                if (isUniqueViolation(error, "idx_one_active_room_per_user")) {
                     // A concurrent join committed first; report which room, so the
                     // client can offer to switch.
                     const currentRoom = await this.findCurrentRoom(
@@ -325,26 +320,18 @@ export class WatchPartyService {
                     );
                     throw currentRoom
                         ? this.membershipElsewhereConflict(currentRoom)
-                        : new ConflictException(
-                              "You already belong to an active watch room.",
-                          );
+                        : new AlreadyInActiveRoom("create");
                 }
-                if (
-                    pgError.code === "23505" &&
-                    pgError.constraint === "idx_active_room_code"
-                ) {
+                if (isUniqueViolation(error, "idx_active_room_code")) {
                     if (
-                        !requestedRoomCode &&
-                        codeAttempt + 1 < ROOM_CODE_GENERATION_ATTEMPTS
+                        shouldRetryRoomCode({
+                            requestedCode: requestedRoomCode,
+                            attempt: codeAttempt,
+                        })
                     ) {
                         continue;
                     }
-                    throw new ConflictException({
-                        message: requestedRoomCode
-                            ? `Room code ${requestedRoomCode} is already in use. Choose another code.`
-                            : "Could not allocate a unique room code. Please try again.",
-                        error: { code: "ROOM_CODE_IN_USE" },
-                    });
+                    throw new RoomCodeTaken(requestedRoomCode || null);
                 }
                 this.logger.error({
                     message:
@@ -396,17 +383,13 @@ export class WatchPartyService {
      * @throws {Error} Throws if database operations fail or if Redis synchronization and its subsequent compensation fail.
      */
     async associateParticipant(p: { dto: JoinRoomDto; userId: string }) {
-        const cleanCode = p.dto.roomCode.trim().toUpperCase();
+        return withHttpErrors(() => this.joinRoom(p));
+    }
 
-        if (
-            !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-                p.userId,
-            )
-        ) {
-            throw new BadRequestException(
-                "An authenticated user UUID is required to join a room.",
-            );
-        }
+    private async joinRoom(p: { dto: JoinRoomDto; userId: string }) {
+        const cleanCode = normalizeRoomCode(p.dto.roomCode);
+
+        assertJoinIdentity(p.userId);
 
         try {
             const result = await this.repo.withTransaction(
@@ -420,14 +403,6 @@ export class WatchPartyService {
                         cleanCode,
                     );
 
-                    if (lockedRoom?.lifecycle_status === "PROVISIONING") {
-                        // Committed but not yet projected/activated by the outbox.
-                        // 503 tells the gateway client to retry shortly.
-                        throw new ServiceUnavailableException(
-                            "The watch room is still being prepared. Retrying shortly.",
-                        );
-                    }
-
                     if (!lockedRoom) {
                         this.logger.warn({
                             message:
@@ -435,11 +410,11 @@ export class WatchPartyService {
                             roomCode: cleanCode,
                             userId: p.userId,
                         });
-
-                        throw new NotFoundException(
-                            "Handshake rejected: No matching active room stream code sequence.",
-                        );
                     }
+
+                    // PROVISIONING (committed, not yet activated by the outbox) is
+                    // a retryable 503; no room is a 404.
+                    assertRoomJoinable(lockedRoom);
 
                     const room = lockedRoom;
 
@@ -458,29 +433,18 @@ export class WatchPartyService {
 
                     const isOwner = p.userId === room.owner_id;
 
-                    /*
-                     * The password is checked only on first entry. The owner
-                     * never needs it, and a user with an ACTIVE participant
-                     * record already proved it when that record was created, so
-                     * a reconnect (refresh, network drop within the grace
-                     * window) is accepted without it. The record goes inactive
-                     * on voluntary leave or grace expiry, after which the
-                     * password is required again.
-                     */
-                    const passwordRequired = !isOwner && !existingParticipant;
+                    // Owner and reconnecting members skip the password (domain/membership.ts).
+                    const passwordRequired = isJoinPasswordRequired({
+                        isOwner,
+                        hasActiveMembership: Boolean(existingParticipant),
+                    });
                     const attemptId = `${room.id}:${p.userId}`;
 
                     if (passwordRequired) {
-                        /*
-                         * A blank password never opens a room. The socket
-                         * join payload is not run through the HTTP
-                         * ValidationPipe, so this is checked here. Not counted
-                         * as a wrong guess: nothing was guessed.
-                         */
-                        if (
-                            typeof p.dto.passwordPlain !== "string" ||
-                            p.dto.passwordPlain.trim().length === 0
-                        ) {
+                        // Blank is rejected before the limiter: nothing was guessed.
+                        try {
+                            assertJoinPasswordPresent(p.dto.passwordPlain);
+                        } catch (missingPassword) {
                             this.logger.warn({
                                 message:
                                     "Join room rejected: Room password missing",
@@ -488,10 +452,7 @@ export class WatchPartyService {
                                 roomId: room.id,
                                 userId: p.userId,
                             });
-
-                            throw new BadRequestException(
-                                "This room is password protected. Enter the room password to join.",
-                            );
+                            throw missingPassword;
                         }
 
                         /*
@@ -525,9 +486,7 @@ export class WatchPartyService {
                                 userId: p.userId,
                             });
 
-                            throw new BadRequestException(
-                                "Security credentials verification failure: Authentication rejected.",
-                            );
+                            throw new WrongRoomPassword();
                         }
 
                         await this.attemptLimiter.reset(
@@ -569,11 +528,10 @@ export class WatchPartyService {
                                 room.id,
                             );
 
-                        if (participantCount >= room.max_participants) {
-                            throw new BadRequestException(
-                                `Room capacity overflow limit reached. Cap: ${room.max_participants}`,
-                            );
-                        }
+                        assertRoomHasCapacity({
+                            activeCount: participantCount,
+                            capacity: room.max_participants,
+                        });
 
                         /*
                          * A user cannot simultaneously belong to another room.
@@ -646,21 +604,13 @@ export class WatchPartyService {
 
             return result;
         } catch (error: unknown) {
-            const pgError = error as {
-                code?: string;
-                constraint?: string;
-            };
-
-            if (
-                pgError.code === "23505" &&
-                pgError.constraint === "idx_one_active_room_per_user"
-            ) {
+            if (isUniqueViolation(error, "idx_one_active_room_per_user")) {
                 this.logger.warn({
                     message:
                         "Join rejected: User already has an active room membership",
                     roomCode: cleanCode,
                     userId: p.userId,
-                    constraint: pgError.constraint,
+                    constraint: "idx_one_active_room_per_user",
                 });
 
                 const currentRoom = await this.findCurrentRoom(
@@ -669,9 +619,7 @@ export class WatchPartyService {
                 );
                 throw currentRoom
                     ? this.membershipElsewhereConflict(currentRoom)
-                    : new ConflictException(
-                          "You already belong to an active watch room. Leave that room before joining another one.",
-                      );
+                    : new AlreadyInActiveRoom("join");
             }
             this.logger.error({
                 message: "Failed room participant association",
@@ -704,7 +652,7 @@ export class WatchPartyService {
                         transactionClient,
                         membershipRoomId,
                     );
-                    if (!room || room.lifecycle_status !== "ACTIVE") {
+                    if (!room || !acceptsParticipants(room.lifecycle_status)) {
                         return null;
                     }
 
@@ -822,9 +770,7 @@ export class WatchPartyService {
                         if (
                             inactiveRoom &&
                             inactiveRoom.owner_id === userId &&
-                            ["TERMINATING", "TERMINATED"].includes(
-                                inactiveRoom.lifecycle_status,
-                            )
+                            isShuttingDown(inactiveRoom.lifecycle_status)
                         ) {
                             return {
                                 status: "ROOM_ALREADY_TERMINATING",
@@ -951,7 +897,7 @@ export class WatchPartyService {
      */
     async getRoomDetailsByCode(roomCode: string) {
         try {
-            const cleanCode = roomCode.trim().toUpperCase();
+            const cleanCode = normalizeRoomCode(roomCode);
 
             const room = await this.repo.findActiveRoomDetailsByCode(cleanCode);
 
@@ -977,11 +923,11 @@ export class WatchPartyService {
     }
 
     async assertRoomActive(roomId: string): Promise<void> {
-        if (!(await this.repo.isRoomActive(roomId))) {
-            throw new ConflictException(
-                "The watch room is no longer accepting participants.",
-            );
-        }
+        return withHttpErrors(async () => {
+            if (!(await this.repo.isRoomActive(roomId))) {
+                throw new RoomNotAcceptingParticipants();
+            }
+        });
     }
 
     /**
@@ -1006,25 +952,19 @@ export class WatchPartyService {
     }
 
     /**
-     * Structured 409 for "you are still in another room". The client offers
-     * "leave it and continue", then retries with `leaveCurrent: true`.
+     * "You are still in another room". Mapped to the structured 409 the client
+     * answers with "leave it and continue" (`leaveCurrent: true`).
      */
     private membershipElsewhereConflict(current: {
         roomId: string;
         roomCode: string;
         isOwner: boolean;
     }) {
-        return new ConflictException({
-            message: current.isOwner
-                ? `You are still hosting room ${current.roomCode}. Leaving it will close it for everyone.`
-                : `You are still in room ${current.roomCode}. Leave it before joining another room.`,
-            error: {
-                code: "ACTIVE_MEMBERSHIP_ELSEWHERE",
-                roomId: current.roomId,
-                roomCode: current.roomCode,
-                isOwner: current.isOwner,
-            },
-        });
+        return new MemberOfAnotherRoom(
+            current.roomId,
+            current.roomCode,
+            current.isOwner,
+        );
     }
 
     /**
