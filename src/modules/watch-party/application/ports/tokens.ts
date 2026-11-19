@@ -6,3 +6,4 @@ export const ATTEMPT_LIMITER = Symbol("AttemptLimiterPort");
 export const LIFECYCLE_OUTBOX = Symbol("LifecycleOutboxPort");
 export const MEDIA_SESSION = Symbol("MediaSessionPort");
 export const ROOM_STATE_PROJECTION = Symbol("RoomStateProjectionPort");
+export const REALTIME_STATE = Symbol("RealtimeStatePort");

@@ -18,6 +18,7 @@ import {
     LIFECYCLE_OUTBOX,
     MEDIA_SESSION,
     PASSWORD_HASHER,
+    REALTIME_STATE,
     ROOM_STATE_PROJECTION,
     WATCH_PARTY_STORE,
 } from "./application/ports/tokens.js";
@@ -106,7 +107,24 @@ describe("WatchPartyModule wiring", () => {
         expect(relay.repository).toBe(moduleRef.get(CHAT_STORE));
     });
 
-    it("the gateway resolves", () => {
-        expect(moduleRef.get(WatchPartyGateway)).toBeInstanceOf(WatchPartyGateway);
+    it("the gateway's realtime collaborators share one context with the bound ports", () => {
+        const gateway = moduleRef.get(WatchPartyGateway) as unknown as Record<
+            string,
+            { ctx: Record<string, unknown> }
+        >;
+        expect(gateway).toBeInstanceOf(WatchPartyGateway);
+
+        const ctx = gateway.lifecycle.ctx;
+        expect(ctx.redis).toBe(moduleRef.get(REALTIME_STATE, { strict: false }));
+        expect(ctx.redis).toBeInstanceOf(RedisProvider);
+        expect(ctx.liveKitService).toBe(moduleRef.get(MEDIA_SESSION, { strict: false }));
+        expect(ctx.watchPartyService).toBe(moduleRef.get(WatchPartyService));
+        expect(ctx.chatRelay).toBe(moduleRef.get(RoomChatRelay));
+        for (const part of ["handshake", "playback", "chat"]) {
+            expect(gateway[part].ctx).toBe(ctx);
+        }
+        for (const part of ["lifecycle", "media", "chat", "playback"]) {
+            expect(ctx[part]).toBeDefined();
+        }
     });
 });

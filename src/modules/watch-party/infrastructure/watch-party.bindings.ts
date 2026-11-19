@@ -9,6 +9,7 @@ import { BcryptPasswordHasher } from "./security/bcrypt-password-hasher.js";
 import type {
     AttemptLimiterPort,
     MediaSessionPort,
+    RealtimeStatePort,
     RoomStateProjectionPort,
 } from "../application/ports/collaborators.port.js";
 import {
@@ -17,6 +18,7 @@ import {
     LIFECYCLE_OUTBOX,
     MEDIA_SESSION,
     PASSWORD_HASHER,
+    REALTIME_STATE,
     ROOM_STATE_PROJECTION,
     WATCH_PARTY_STORE,
 } from "../application/ports/tokens.js";
@@ -29,6 +31,7 @@ import {
 type Implements<Port, Adapter extends Port> = Adapter;
 export type AdapterChecks = [
     Implements<RoomStateProjectionPort, RedisProvider>,
+    Implements<RealtimeStatePort, RedisProvider>,
     Implements<MediaSessionPort, LiveKitService>,
     Implements<AttemptLimiterPort, AttemptLimiter>,
 ];
@@ -42,4 +45,5 @@ export const WATCH_PARTY_PORT_BINDINGS: Provider[] = [
     { provide: LIFECYCLE_OUTBOX, useExisting: RoomLifecycleOutboxService },
     { provide: MEDIA_SESSION, useExisting: LiveKitService },
     { provide: ROOM_STATE_PROJECTION, useExisting: RedisProvider },
+    { provide: REALTIME_STATE, useExisting: RedisProvider },
 ];

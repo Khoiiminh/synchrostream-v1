@@ -197,9 +197,12 @@ async function flush() {
 }
 
 function actorFor(gateway: WatchPartyGateway, roomId = ROOM) {
+    // Phase 4: the runtime maps live in the gateway's RoomRuntimeRegistry.
     return (
-        gateway as unknown as { runningActors: Map<string, { getSnapshot(): any }> }
-    ).runningActors.get(roomId);
+        gateway as unknown as {
+            registry: { runningActors: Map<string, { getSnapshot(): any }> };
+        }
+    ).registry.runningActors.get(roomId);
 }
 
 const asSocket = (s: FakeSocket) => s as unknown as AuthenticatedSocket;

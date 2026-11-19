@@ -33,8 +33,10 @@ export interface LifecycleOutboxPort {
     provisionRoomNow(roomId: string): Promise<void>;
 }
 
-/** Media-provider side of room reconciliation. Adapter: LiveKitService. */
+/** Media-provider sessions. Adapter: LiveKitService. */
 export interface MediaSessionPort {
+    /** Starts (or returns) the room's ACTIVE session; used by the gateway's background startup. */
+    getOrCreateMediaSession(roomId: string): Promise<{ id: string }>;
     reconcileMediaSession(
         mediaSessionId: string,
         recoveryStartedAt: Date | string,
@@ -61,6 +63,31 @@ export interface RoomStateProjectionPort {
         state: Record<string, string | number>,
     ): Promise<boolean>;
     getRoomState(roomCode: string): Promise<Record<string, string>>;
+}
+
+/** Per-member presence keys with a TTL. Adapter: RedisProvider. */
+export interface PresencePort {
+    refreshPresence(
+        members: Array<{ roomId: string; userId: string }>,
+        ttlSeconds: number,
+    ): Promise<void>;
+    getPresence(members: Array<{ roomId: string; userId: string }>): Promise<boolean[]>;
+    clearPresence(roomId: string, userId: string): Promise<void>;
+}
+
+/**
+ * Everything the realtime gateway reads and writes in the shared runtime
+ * store: the room projection, playback writes, sync pulses and presence.
+ * Adapter: RedisProvider.
+ */
+export interface RealtimeStatePort extends RoomStateProjectionPort, PresencePort {
+    /** Playback write, accepted only while `expectedRoomId` owns the key. */
+    updateRoomState(
+        roomCode: string,
+        state: Record<string, string | number>,
+        expectedRoomId: string,
+    ): Promise<boolean>;
+    publicSyncPulse(roomCode: string, payload: unknown): Promise<void>;
 }
 
 /** chat_history persistence. Adapter: RoomChatRepository. */
