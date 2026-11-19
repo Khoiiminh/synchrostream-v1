@@ -21,7 +21,9 @@ function sources(dir: string): string[] {
     return readdirSync(dir).flatMap((entry) => {
         const path = join(dir, entry);
         if (statSync(path).isDirectory()) return sources(path);
-        return path.endsWith(".ts") && !/[.-]spec\.ts$/.test(path) ? [path] : [];
+        return path.endsWith(".ts") && !/[.-]spec\.ts$/.test(path)
+            ? [path]
+            : [];
     });
 }
 
@@ -31,7 +33,9 @@ function allowed(file: string, specifier: string): boolean {
     const target = resolve(dirname(file), specifier).replace(/\.js$/, "");
     return (
         ALLOWED_FILES.includes(target) ||
-        ALLOWED_ROOTS.some((root) => target === root || target.startsWith(root + sep))
+        ALLOWED_ROOTS.some(
+            (root) => target === root || target.startsWith(root + sep),
+        )
     );
 }
 

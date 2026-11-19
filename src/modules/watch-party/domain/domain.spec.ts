@@ -65,10 +65,42 @@ describe("domain/room lifecycle", () => {
     });
 
     it.each([
-        ["PROVISIONING", { live: true, accepts: false, shuttingDown: false, reservesCode: true }],
-        ["ACTIVE", { live: true, accepts: true, shuttingDown: false, reservesCode: true }],
-        ["TERMINATING", { live: false, accepts: false, shuttingDown: true, reservesCode: true }],
-        ["TERMINATED", { live: false, accepts: false, shuttingDown: true, reservesCode: false }],
+        [
+            "PROVISIONING",
+            {
+                live: true,
+                accepts: false,
+                shuttingDown: false,
+                reservesCode: true,
+            },
+        ],
+        [
+            "ACTIVE",
+            {
+                live: true,
+                accepts: true,
+                shuttingDown: false,
+                reservesCode: true,
+            },
+        ],
+        [
+            "TERMINATING",
+            {
+                live: false,
+                accepts: false,
+                shuttingDown: true,
+                reservesCode: true,
+            },
+        ],
+        [
+            "TERMINATED",
+            {
+                live: false,
+                accepts: false,
+                shuttingDown: true,
+                reservesCode: false,
+            },
+        ],
     ])("%s predicates", (status, expected) => {
         expect({
             live: isLiveRoom(status),
@@ -94,13 +126,16 @@ describe("domain/room-code", () => {
     });
 
     it("never retries a requested code", () => {
-        expect(shouldRetryRoomCode({ requestedCode: "ABC123", attempt: 0 })).toBe(false);
+        expect(
+            shouldRetryRoomCode({ requestedCode: "ABC123", attempt: 0 }),
+        ).toBe(false);
     });
 
     it("retries a generated code until the attempts run out", () => {
         const retries = Array.from(
             { length: ROOM_CODE_GENERATION_ATTEMPTS },
-            (_, attempt) => shouldRetryRoomCode({ requestedCode: undefined, attempt }),
+            (_, attempt) =>
+                shouldRetryRoomCode({ requestedCode: undefined, attempt }),
         );
         expect(retries).toEqual([true, true, true, true, false]);
     });
@@ -148,17 +183,21 @@ describe("domain/membership", () => {
         expect(() =>
             assertJoinIdentity("22222222-2222-4222-8222-222222222222"),
         ).not.toThrow();
-        expect(() => assertJoinIdentity("not-a-uuid")).toThrow(InvalidJoinIdentity);
+        expect(() => assertJoinIdentity("not-a-uuid")).toThrow(
+            InvalidJoinIdentity,
+        );
         expect(() => assertJoinIdentity("")).toThrow(InvalidJoinIdentity);
     });
 
     it("PROVISIONING is checked before absence: 503 wins over 404", () => {
-        expect(() => assertRoomJoinable({ lifecycle_status: "PROVISIONING" })).toThrow(
-            RoomStillProvisioning,
-        );
+        expect(() =>
+            assertRoomJoinable({ lifecycle_status: "PROVISIONING" }),
+        ).toThrow(RoomStillProvisioning);
         expect(() => assertRoomJoinable(undefined)).toThrow(RoomNotFound);
         expect(() => assertRoomJoinable(null)).toThrow(RoomNotFound);
-        expect(() => assertRoomJoinable({ lifecycle_status: "ACTIVE" })).not.toThrow();
+        expect(() =>
+            assertRoomJoinable({ lifecycle_status: "ACTIVE" }),
+        ).not.toThrow();
     });
 
     it.each([
@@ -171,16 +210,18 @@ describe("domain/membership", () => {
     });
 
     it("a blank join password is RoomPasswordRequired", () => {
-        expect(() => assertJoinPasswordPresent("  ")).toThrow(RoomPasswordRequired);
+        expect(() => assertJoinPasswordPresent("  ")).toThrow(
+            RoomPasswordRequired,
+        );
         expect(() => assertJoinPasswordPresent("pw")).not.toThrow();
     });
 
     it("capacity: below the cap admits, at the cap is RoomFull", () => {
         expect(hasCapacity({ activeCount: 4, capacity: 5 })).toBe(true);
         expect(hasCapacity({ activeCount: 5, capacity: 5 })).toBe(false);
-        expect(() => assertRoomHasCapacity({ activeCount: 5, capacity: 5 })).toThrow(
-            new RoomFull(5),
-        );
+        expect(() =>
+            assertRoomHasCapacity({ activeCount: 5, capacity: 5 }),
+        ).toThrow(new RoomFull(5));
     });
 });
 
@@ -202,17 +243,29 @@ describe("domain/playback", () => {
             action: "PLAY",
             targetPlayhead: 10,
         });
-        expect(playing).toEqual({ playhead: 10, status: "PLAYING", lastUpdated: 1 });
+        expect(playing).toEqual({
+            playhead: 10,
+            status: "PLAYING",
+            lastUpdated: 1,
+        });
 
         const seeked = applyPlaybackCommand(playing, {
             ...at(2),
             action: "SEEK",
             targetPlayhead: 50,
         });
-        expect(seeked).toEqual({ playhead: 50, status: "PLAYING", lastUpdated: 2 });
+        expect(seeked).toEqual({
+            playhead: 50,
+            status: "PLAYING",
+            lastUpdated: 2,
+        });
 
         expect(
-            applyPlaybackCommand(seeked, { ...at(3), action: "PAUSE", targetPlayhead: 51 }),
+            applyPlaybackCommand(seeked, {
+                ...at(3),
+                action: "PAUSE",
+                targetPlayhead: 51,
+            }),
         ).toEqual({ playhead: 51, status: "PAUSED", lastUpdated: 3 });
     });
 

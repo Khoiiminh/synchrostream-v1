@@ -1,8 +1,14 @@
 import { BadRequestException, HttpException } from "@nestjs/common";
 import type { AuthenticatedSocket } from "../../../auth/auth.types.js";
 import { WatchRoomActor } from "../../watch-room.actor.js";
-import type { JoinRoomDto, WatchPartyService } from "../../watch-party.service.js";
-import { PRESENCE_TTL_SECONDS, type RealtimeContext } from "./realtime-context.js";
+import type {
+    JoinRoomDto,
+    WatchPartyService,
+} from "../../watch-party.service.js";
+import {
+    PRESENCE_TTL_SECONDS,
+    type RealtimeContext,
+} from "./realtime-context.js";
 
 /**
  * room:connect: membership (with the optional room switch), actor and
@@ -70,7 +76,10 @@ export class RoomHandshake {
                 leftRoomId: detail.roomId,
                 targetRoomCode: dto.roomCode,
             });
-            await this.ctx.lifecycle.leaveRoomVoluntarily(userId, detail.roomId);
+            await this.ctx.lifecycle.leaveRoomVoluntarily(
+                userId,
+                detail.roomId,
+            );
             return await this.ctx.watchPartyService.associateParticipant({
                 dto,
                 userId,
@@ -213,7 +222,9 @@ export class RoomHandshake {
                 // A concurrent handshake for the same room may have created the actor
                 // while this one awaited Redis. Keep the first one so no member's
                 // registration is lost.
-                const concurrentActor = this.ctx.registry.runningActors.get(session.roomId);
+                const concurrentActor = this.ctx.registry.runningActors.get(
+                    session.roomId,
+                );
                 if (concurrentActor) {
                     actor = concurrentActor;
                 } else {
@@ -293,7 +304,9 @@ export class RoomHandshake {
             // after the earlier active check but before this socket joined the room
             // channel. Re-check now that any later broadcast will reach this socket.
             try {
-                await this.ctx.watchPartyService.assertRoomActive(session.roomId);
+                await this.ctx.watchPartyService.assertRoomActive(
+                    session.roomId,
+                );
             } catch (inactiveError) {
                 roomEndedDuringHandshake = true;
                 throw inactiveError;
@@ -313,7 +326,9 @@ export class RoomHandshake {
              * If it somehow does not exist, reconstruct the basic
              * room projection.
              */
-            const roomState = await this.ctx.redis.getRoomState(session.roomCode);
+            const roomState = await this.ctx.redis.getRoomState(
+                session.roomCode,
+            );
 
             if (
                 roomState.roomId !== session.roomId ||
@@ -351,7 +366,9 @@ export class RoomHandshake {
                 mediaSessionId: snapshot.mediaSessionId,
             });
 
-            this.ctx.server.to(session.roomId).emit("room:state_update", snapshot);
+            this.ctx.server
+                .to(session.roomId)
+                .emit("room:state_update", snapshot);
 
             this.ctx.logger.log({
                 message: "Participant successfully bound to room pipeline",
@@ -394,7 +411,10 @@ export class RoomHandshake {
         } catch (error) {
             if (associatedSession) {
                 const session = associatedSession;
-                const cleanupKey = this.ctx.registry.getCleanupKey(user.id, session.roomId);
+                const cleanupKey = this.ctx.registry.getCleanupKey(
+                    user.id,
+                    session.roomId,
+                );
                 const hasOtherBoundSocket = Array.from(
                     this.ctx.registry.socketToParticipantMap.entries(),
                 ).some(([socketId, metadata]) => {
@@ -460,7 +480,8 @@ export class RoomHandshake {
                 }
 
                 // A failed handshake must not cancel the prior grace cleanup permanently.
-                const pendingCleanup = this.ctx.registry.pendingCleanups.get(cleanupKey);
+                const pendingCleanup =
+                    this.ctx.registry.pendingCleanups.get(cleanupKey);
                 if (pendingCleanup && !session.createdMembership) {
                     clearTimeout(pendingCleanup);
                     this.ctx.registry.pendingCleanups.delete(cleanupKey);

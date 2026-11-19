@@ -5,6 +5,7 @@ import type { RedisProvider } from "@/shared/infrastructure/cache/redis.provider
 import type { LiveKitService } from "../livekit/livekit.service.js";
 import type { RoomChatRelay } from "./room-chat.relay.js";
 import type { AuthenticatedSocket } from "../auth/auth.types.js";
+import type { WatchRoomActor } from "./watch-room.actor.js";
 
 /*
  * Characterization tests (refactor plan, phase 0) for the gateway's room
@@ -38,7 +39,9 @@ class FakeSocket {
     connected = true;
     readonly rooms = new Set<string>();
     readonly emitted: Array<{ event: string; payload: unknown }> = [];
-    readonly data: { user?: { id: string; username: string; email: string; role: string } };
+    readonly data: {
+        user?: { id: string; username: string; email: string; role: string };
+    };
 
     constructor(
         readonly id: string,
@@ -46,7 +49,14 @@ class FakeSocket {
         private readonly onDisconnect: (socket: FakeSocket) => void,
     ) {
         this.data = userId
-            ? { user: { id: userId, username: `name-${userId}`, email: `${userId}@x`, role: "user" } }
+            ? {
+                  user: {
+                      id: userId,
+                      username: `name-${userId}`,
+                      email: `${userId}@x`,
+                      role: "user",
+                  },
+              }
             : {};
     }
 
@@ -65,7 +75,7 @@ class FakeSocket {
         return true;
     }
 
-    disconnect(_close?: boolean) {
+    disconnect() {
         if (!this.connected) return this;
         this.connected = false;
         this.rooms.clear();
@@ -74,7 +84,9 @@ class FakeSocket {
     }
 
     events(name: string) {
-        return this.emitted.filter((e) => e.event === name).map((e) => e.payload);
+        return this.emitted
+            .filter((e) => e.event === name)
+            .map((e) => e.payload);
     }
 }
 
@@ -99,8 +111,10 @@ class FakeNamespace {
 
     in(room: string) {
         return {
-            fetchSockets: async () =>
-                [...this.sockets.values()].filter((s) => s.rooms.has(room)),
+            fetchSockets: () =>
+                Promise.resolve(
+                    [...this.sockets.values()].filter((s) => s.rooms.has(room)),
+                ),
         };
     }
 
@@ -126,14 +140,25 @@ function sessionFor(userId: string, overrides: Record<string, unknown> = {}) {
 
 function setup() {
     const service = {
-        associateParticipant: jest.fn(async ({ userId }: { userId: string }) =>
-            sessionFor(userId),
+        associateParticipant: jest.fn(({ userId }: { userId: string }) =>
+            Promise.resolve(sessionFor(userId)),
         ),
         disassociateParticipant: jest.fn().mockResolvedValue(null),
-        leaveRoomSession: jest.fn(async (userId: string): Promise<Record<string, unknown>> =>
-            userId === OWNER
-                ? { status: "ROOM_DESTROYED", roomId: ROOM, roomCode: CODE }
-                : { status: "PARTICIPANT_EVICTED", roomId: ROOM, roomCode: CODE },
+        leaveRoomSession: jest.fn(
+            (userId: string): Promise<Record<string, unknown>> =>
+                Promise.resolve(
+                    userId === OWNER
+                        ? {
+                              status: "ROOM_DESTROYED",
+                              roomId: ROOM,
+                              roomCode: CODE,
+                          }
+                        : {
+                              status: "PARTICIPANT_EVICTED",
+                              roomId: ROOM,
+                              roomCode: CODE,
+                          },
+                ),
         ),
         assertRoomActive: jest.fn().mockResolvedValue(undefined),
         listActiveMemberships: jest.fn().mockResolvedValue([]),
@@ -148,7 +173,9 @@ function setup() {
         updateRoomState: jest.fn().mockResolvedValue(true),
         publicSyncPulse: jest.fn().mockResolvedValue(undefined),
         refreshPresence: jest.fn().mockResolvedValue(undefined),
-        getPresence: jest.fn(async (list: unknown[]) => list.map(() => false)),
+        getPresence: jest.fn((list: unknown[]) =>
+            Promise.resolve(list.map(() => false)),
+        ),
         clearPresence: jest.fn().mockResolvedValue(undefined),
     };
     const liveKit = {
@@ -171,7 +198,9 @@ function setup() {
     let nextId = 0;
     const socket = (userId: string | null) => {
         const s = new FakeSocket(`s${++nextId}`, userId, (closed) => {
-            void gateway.handleDisconnect(closed as unknown as AuthenticatedSocket);
+            void gateway.handleDisconnect(
+                closed as unknown as AuthenticatedSocket,
+            );
         });
         server.sockets.set(s.id, s);
         return s;
@@ -183,7 +212,10 @@ function setup() {
     ) => {
         await gateway.handleConnectionHandshake(
             s as unknown as AuthenticatedSocket,
-            { dto: { roomCode: CODE, passwordPlain: "pw" } as never, ...payload },
+            {
+                dto: { roomCode: CODE, passwordPlain: "pw" },
+                ...payload,
+            },
         );
         await flush();
     };
@@ -200,7 +232,7 @@ function actorFor(gateway: WatchPartyGateway, roomId = ROOM) {
     // Phase 4: the runtime maps live in the gateway's RoomRuntimeRegistry.
     return (
         gateway as unknown as {
-            registry: { runningActors: Map<string, { getSnapshot(): any }> };
+            registry: { runningActors: Map<string, WatchRoomActor> };
         }
     ).registry.runningActors.get(roomId);
 }
@@ -238,7 +270,7 @@ describe("WatchPartyGateway lifecycle", () => {
 
             await expect(
                 h.gateway.handleConnectionHandshake(asSocket(s), {
-                    dto: { roomCode: CODE, passwordPlain: "pw" } as never,
+                    dto: { roomCode: CODE, passwordPlain: "pw" },
                 }),
             ).rejects.toThrow(BadRequestException);
             expect(h.service.associateParticipant).not.toHaveBeenCalled();
@@ -290,10 +322,14 @@ describe("WatchPartyGateway lifecycle", () => {
             const h = track(setup());
             await h.connect(h.socket(MEMBER));
 
-            expect(h.liveKit.getOrCreateMediaSession).toHaveBeenCalledWith(ROOM);
+            expect(h.liveKit.getOrCreateMediaSession).toHaveBeenCalledWith(
+                ROOM,
+            );
             const updates = h.server.events("room:state_update");
             expect(updates).toHaveLength(2);
-            expect(updates[1].payload).toMatchObject({ mediaSessionId: "ms-1" });
+            expect(updates[1].payload).toMatchObject({
+                mediaSessionId: "ms-1",
+            });
         });
 
         it("retries media startup with backoff while the room stays active", async () => {
@@ -314,7 +350,9 @@ describe("WatchPartyGateway lifecycle", () => {
 
         it("stops media startup when the room is no longer active", async () => {
             const h = track(setup());
-            h.liveKit.getOrCreateMediaSession.mockRejectedValue(new Error("down"));
+            h.liveKit.getOrCreateMediaSession.mockRejectedValue(
+                new Error("down"),
+            );
             // Two handshake checks pass, then the media loop's check fails.
             h.service.assertRoomActive
                 .mockResolvedValueOnce(undefined)
@@ -479,7 +517,7 @@ describe("WatchPartyGateway lifecycle", () => {
             await h.connect(s);
 
             expect(s.events("room:error")).toEqual([
-                { message: (error as Error).message, retryable },
+                { message: error.message, retryable },
             ]);
         });
 
@@ -512,7 +550,9 @@ describe("WatchPartyGateway lifecycle", () => {
             expect(oldSocket.connected).toBe(false);
             expect(newSocket.connected).toBe(true);
             expect(h.service.disassociateParticipant).not.toHaveBeenCalled();
-            expect(actorFor(h.gateway)?.getSnapshot().occupancy.current).toBe(1);
+            expect(actorFor(h.gateway)?.getSnapshot().occupancy.current).toBe(
+                1,
+            );
         });
     });
 
@@ -534,10 +574,12 @@ describe("WatchPartyGateway lifecycle", () => {
             expect(h.service.disassociateParticipant).toHaveBeenCalledWith(
                 `part-${MEMBER}`,
             );
-            expect(h.server.events("room:member_left").map((e) => e.payload)).toEqual([
-                { userId: MEMBER },
-            ]);
-            expect(actorFor(h.gateway)?.getSnapshot().occupancy.current).toBe(1);
+            expect(
+                h.server.events("room:member_left").map((e) => e.payload),
+            ).toEqual([{ userId: MEMBER }]);
+            expect(actorFor(h.gateway)?.getSnapshot().occupancy.current).toBe(
+                1,
+            );
         });
 
         it("releases the actor when the last participant's grace expires", async () => {
@@ -591,9 +633,17 @@ describe("WatchPartyGateway lifecycle", () => {
             owner.disconnect();
             await jest.advanceTimersByTimeAsync(GRACE_MS);
 
-            expect(h.service.leaveRoomSession).toHaveBeenCalledWith(OWNER, ROOM);
+            expect(h.service.leaveRoomSession).toHaveBeenCalledWith(
+                OWNER,
+                ROOM,
+            );
             expect(h.server.events("room:terminated")).toEqual([
-                { room: ROOM, except: [], event: "room:terminated", payload: TERMINATED },
+                {
+                    room: ROOM,
+                    except: [],
+                    event: "room:terminated",
+                    payload: TERMINATED,
+                },
             ]);
             expect(member.connected).toBe(false);
             expect(actorFor(h.gateway)).toBeUndefined();
@@ -644,7 +694,10 @@ describe("WatchPartyGateway lifecycle", () => {
             const ack = await h.gateway.handleLeaveRoom(asSocket(member));
 
             expect(ack).toEqual({ ok: true, status: "PARTICIPANT_EVICTED" });
-            expect(h.service.leaveRoomSession).toHaveBeenCalledWith(MEMBER, ROOM);
+            expect(h.service.leaveRoomSession).toHaveBeenCalledWith(
+                MEMBER,
+                ROOM,
+            );
             expect(h.redis.clearPresence).toHaveBeenCalledWith(ROOM, MEMBER);
             expect(h.server.events("room:member_left")).toEqual([
                 {
@@ -724,7 +777,9 @@ describe("WatchPartyGateway lifecycle", () => {
         it("NOT_BOUND for a socket that is not in a room", async () => {
             const h = track(setup());
 
-            expect(await h.gateway.handleLeaveRoom(asSocket(h.socket(MEMBER)))).toEqual({
+            expect(
+                await h.gateway.handleLeaveRoom(asSocket(h.socket(MEMBER))),
+            ).toEqual({
                 ok: true,
                 status: "NOT_BOUND",
             });
@@ -733,7 +788,9 @@ describe("WatchPartyGateway lifecycle", () => {
         it("rejects an unauthenticated socket", async () => {
             const h = track(setup());
 
-            expect(await h.gateway.handleLeaveRoom(asSocket(h.socket(null)))).toEqual({
+            expect(
+                await h.gateway.handleLeaveRoom(asSocket(h.socket(null))),
+            ).toEqual({
                 ok: false,
                 message: "Leave rejected: socket is not authenticated.",
             });
@@ -841,7 +898,10 @@ describe("WatchPartyGateway lifecycle", () => {
     });
 
     describe("room:sync:pulse", () => {
-        const pulse = (action: "PLAY" | "PAUSE" | "SEEK", playhead: number) => ({
+        const pulse = (
+            action: "PLAY" | "PAUSE" | "SEEK",
+            playhead: number,
+        ) => ({
             roomId: "ignored",
             roomCode: "ignored",
             action,
@@ -853,7 +913,10 @@ describe("WatchPartyGateway lifecycle", () => {
             const owner = h.socket(OWNER);
             await h.connect(owner);
 
-            await h.gateway.handlePlaybackPulse(asSocket(owner), pulse("PLAY", 12));
+            await h.gateway.handlePlaybackPulse(
+                asSocket(owner),
+                pulse("PLAY", 12),
+            );
 
             expect(h.redis.updateRoomState).toHaveBeenCalledWith(
                 CODE,
@@ -866,10 +929,13 @@ describe("WatchPartyGateway lifecycle", () => {
                 originatorId: OWNER,
                 serverExecutionTime: 1_000_000,
             };
-            expect(h.server.events("room:sync:broadcast").map((e) => e.payload)).toEqual([
+            expect(
+                h.server.events("room:sync:broadcast").map((e) => e.payload),
+            ).toEqual([expected]);
+            expect(h.redis.publicSyncPulse).toHaveBeenCalledWith(
+                CODE,
                 expected,
-            ]);
-            expect(h.redis.publicSyncPulse).toHaveBeenCalledWith(CODE, expected);
+            );
         });
 
         it("a non-owner pulse is answered with room:error and not broadcast", async () => {
@@ -878,7 +944,10 @@ describe("WatchPartyGateway lifecycle", () => {
             const member = h.socket(MEMBER);
             await h.connect(member);
 
-            await h.gateway.handlePlaybackPulse(asSocket(member), pulse("PLAY", 5));
+            await h.gateway.handlePlaybackPulse(
+                asSocket(member),
+                pulse("PLAY", 5),
+            );
 
             expect(member.events("room:error")).toEqual([
                 {
@@ -893,8 +962,13 @@ describe("WatchPartyGateway lifecycle", () => {
             const h = track(setup());
 
             await expect(
-                h.gateway.handlePlaybackPulse(asSocket(h.socket(OWNER)), pulse("PLAY", 1)),
-            ).rejects.toThrow("Playback pulse rejected: socket is not bound to a room.");
+                h.gateway.handlePlaybackPulse(
+                    asSocket(h.socket(OWNER)),
+                    pulse("PLAY", 1),
+                ),
+            ).rejects.toThrow(
+                "Playback pulse rejected: socket is not bound to a room.",
+            );
         });
 
         it("repairs a rejected projection write and still broadcasts", async () => {
@@ -913,7 +987,10 @@ describe("WatchPartyGateway lifecycle", () => {
                 participantCount: 1,
             });
 
-            await h.gateway.handlePlaybackPulse(asSocket(owner), pulse("SEEK", 30));
+            await h.gateway.handlePlaybackPulse(
+                asSocket(owner),
+                pulse("SEEK", 30),
+            );
 
             expect(h.redis.reconcileRoomState).toHaveBeenCalledWith(CODE, {
                 roomId: ROOM,
@@ -940,7 +1017,10 @@ describe("WatchPartyGateway lifecycle", () => {
                 lifecycleStatus: "TERMINATING",
             });
 
-            await h.gateway.handlePlaybackPulse(asSocket(owner), pulse("PLAY", 1));
+            await h.gateway.handlePlaybackPulse(
+                asSocket(owner),
+                pulse("PLAY", 1),
+            );
 
             expect(h.server.events("room:sync:broadcast")).toEqual([]);
             expect(owner.events("room:error")).toEqual([]);
@@ -951,9 +1031,14 @@ describe("WatchPartyGateway lifecycle", () => {
             const owner = h.socket(OWNER);
             await h.connect(owner);
             h.redis.updateRoomState.mockResolvedValue(false);
-            h.service.getRoomProjectionState.mockRejectedValue(new Error("db down"));
+            h.service.getRoomProjectionState.mockRejectedValue(
+                new Error("db down"),
+            );
 
-            await h.gateway.handlePlaybackPulse(asSocket(owner), pulse("PAUSE", 2));
+            await h.gateway.handlePlaybackPulse(
+                asSocket(owner),
+                pulse("PAUSE", 2),
+            );
 
             expect(h.server.events("room:sync:broadcast")).toHaveLength(1);
         });
@@ -996,9 +1081,9 @@ describe("WatchPartyGateway lifecycle", () => {
                 rawClientMessageId: "c-1",
             });
             expect(ack).toEqual({ ok: true, id: "msg-1", timestamp: 123 });
-            expect(h.server.events("room:chat:broadcast").map((e) => e.payload)).toEqual([
-                payload,
-            ]);
+            expect(
+                h.server.events("room:chat:broadcast").map((e) => e.payload),
+            ).toEqual([payload]);
         });
 
         it("returns the relay's rejection without broadcasting", async () => {
@@ -1011,10 +1096,15 @@ describe("WatchPartyGateway lifecycle", () => {
                 message: "Slow down.",
                 retryAfterMs: 4_000,
             };
-            h.chat.submit.mockResolvedValue({ accepted: false, ack: rejection });
+            h.chat.submit.mockResolvedValue({
+                accepted: false,
+                ack: rejection,
+            });
 
             expect(
-                await h.gateway.handleChatMessage(asSocket(member), { message: "x" }),
+                await h.gateway.handleChatMessage(asSocket(member), {
+                    message: "x",
+                }),
             ).toEqual(rejection);
             expect(h.server.events("room:chat:broadcast")).toEqual([]);
         });
@@ -1029,7 +1119,9 @@ describe("WatchPartyGateway lifecycle", () => {
             });
 
             expect(
-                await h.gateway.handleChatMessage(asSocket(member), { message: "x" }),
+                await h.gateway.handleChatMessage(asSocket(member), {
+                    message: "x",
+                }),
             ).toEqual({
                 ok: false,
                 code: "NOT_IN_ROOM",
@@ -1048,7 +1140,9 @@ describe("WatchPartyGateway lifecycle", () => {
                 serverReceiveTime: 1_000_000,
                 serverSendTime: 1_000_000,
             });
-            expect(h.gateway.handleClockSync({ clientSendTime: Number.NaN })).toMatchObject({
+            expect(
+                h.gateway.handleClockSync({ clientSendTime: Number.NaN }),
+            ).toMatchObject({
                 clientSendTime: null,
             });
             expect(h.gateway.handleClockSync(undefined)).toMatchObject({
@@ -1070,7 +1164,9 @@ describe("WatchPartyGateway lifecycle", () => {
             expect(member.events("room:telemetry:pong")).toEqual([
                 { currentLatency: 80 },
             ]);
-            expect(actorFor(h.gateway)?.getSnapshot().members[0].latencyScore).toBe(80);
+            expect(
+                actorFor(h.gateway)?.getSnapshot().members[0].latencyScore,
+            ).toBe(80);
         });
 
         it("telemetry from an unbound socket is rejected", () => {
@@ -1082,7 +1178,9 @@ describe("WatchPartyGateway lifecycle", () => {
                     userId: MEMBER,
                     clientTimestamp: 0,
                 }),
-            ).toThrow("Telemetry transmission rejected: socket is not bound to a room.");
+            ).toThrow(
+                "Telemetry transmission rejected: socket is not bound to a room.",
+            );
         });
     });
 });

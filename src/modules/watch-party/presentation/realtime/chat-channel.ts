@@ -85,7 +85,10 @@ export class ChatChannel {
     ): Promise<void> {
         try {
             const messages = await this.ctx.chatRelay.getRecentHistory(roomId);
-            if (this.ctx.registry.socketToParticipantMap.get(socket.id)?.roomId !== roomId)
+            if (
+                this.ctx.registry.socketToParticipantMap.get(socket.id)
+                    ?.roomId !== roomId
+            )
                 return;
             socket.emit("room:chat:history", { roomId, messages });
         } catch (error) {

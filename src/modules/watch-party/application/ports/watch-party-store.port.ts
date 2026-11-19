@@ -29,15 +29,28 @@ export interface WatchPartyStore {
 
     // Creation
     acquireOwnerRoomCreationLock(tx: Tx, ownerId: string): Promise<void>;
-    findOwnedLiveRoom(tx: Tx, ownerId: string): Promise<OwnedRoomRow | undefined>;
-    deactivateMembershipsInTerminatedRooms(tx: Tx, userId: string): Promise<void>;
+    findOwnedLiveRoom(
+        tx: Tx,
+        ownerId: string,
+    ): Promise<OwnedRoomRow | undefined>;
+    deactivateMembershipsInTerminatedRooms(
+        tx: Tx,
+        userId: string,
+    ): Promise<void>;
     /** @throws RoomCodeConflict when the code is held by a non-TERMINATED room. */
     insertProvisioningRoom(tx: Tx, room: NewRoom): Promise<CreatedRoomRow>;
     /** @throws ActiveMembershipConflict when the owner already has an active membership. */
-    insertOwnerParticipant(tx: Tx, roomId: string, ownerId: string): Promise<void>;
+    insertOwnerParticipant(
+        tx: Tx,
+        roomId: string,
+        ownerId: string,
+    ): Promise<void>;
 
     // Join
-    lockLiveRoomByCode(tx: Tx, roomCode: string): Promise<LockedRoomRow | undefined>;
+    lockLiveRoomByCode(
+        tx: Tx,
+        roomCode: string,
+    ): Promise<LockedRoomRow | undefined>;
     findActiveParticipant(
         tx: Tx,
         roomId: string,
@@ -45,11 +58,18 @@ export interface WatchPartyStore {
     ): Promise<ParticipantRow | undefined>;
     countActiveParticipants(tx: Tx, roomId: string): Promise<number>;
     /** @throws ActiveMembershipConflict when the user already has an active membership. */
-    insertParticipant(tx: Tx, roomId: string, userId: string): Promise<ParticipantRow>;
+    insertParticipant(
+        tx: Tx,
+        roomId: string,
+        userId: string,
+    ): Promise<ParticipantRow>;
     incrementActiveRoomStateVersion(tx: Tx, roomId: string): Promise<string>;
 
     // Leave and grace expiry
-    findParticipantRoomId(tx: Tx, participantId: string): Promise<string | undefined>;
+    findParticipantRoomId(
+        tx: Tx,
+        participantId: string,
+    ): Promise<string | undefined>;
     lockRoomStatus(tx: Tx, roomId: string): Promise<RoomStatusRow | undefined>;
     deactivateParticipant(
         tx: Tx,
@@ -62,11 +82,18 @@ export interface WatchPartyStore {
         userId: string,
         roomId?: string,
     ): Promise<UserSessionRow | undefined>;
-    findRoomLifecycle(tx: Tx, roomId: string): Promise<InactiveRoomRow | undefined>;
+    findRoomLifecycle(
+        tx: Tx,
+        roomId: string,
+    ): Promise<InactiveRoomRow | undefined>;
     listActiveMemberUserIds(tx: Tx, roomId: string): Promise<string[]>;
     markRoomTerminating(tx: Tx, roomId: string): Promise<void>;
     deactivateAllRoomParticipants(tx: Tx, roomId: string): Promise<void>;
-    deactivateUserMembership(tx: Tx, roomId: string, userId: string): Promise<void>;
+    deactivateUserMembership(
+        tx: Tx,
+        roomId: string,
+        userId: string,
+    ): Promise<void>;
 
     // Queries
     findCurrentRoom(
@@ -74,7 +101,9 @@ export interface WatchPartyStore {
         userId: string,
         excludeRoomId?: string,
     ): Promise<CurrentRoomRow | undefined>;
-    findActiveRoomDetailsByCode(roomCode: string): Promise<RoomDetails | undefined>;
+    findActiveRoomDetailsByCode(
+        roomCode: string,
+    ): Promise<RoomDetails | undefined>;
     isRoomActive(roomId: string): Promise<boolean>;
     listActiveMemberships(): Promise<ActiveMembershipRow[]>;
     findRoomProjection(roomId: string): Promise<RoomProjectionRow | undefined>;

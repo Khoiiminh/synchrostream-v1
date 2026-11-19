@@ -147,9 +147,7 @@ export class RoomLifecycleOutboxRepository implements OutboxStore {
     }
 
     /** Enqueues ROOM_RECONCILE for transitional rooms with no live event; returns rowCount. */
-    async requeueUnconvergedRooms(
-        tx: Tx | undefined,
-    ): Promise<number | null> {
+    async requeueUnconvergedRooms(tx: Tx | undefined): Promise<number | null> {
         const db = this.executor(tx);
         const requeued =
             await db.query(`INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id)

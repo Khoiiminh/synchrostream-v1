@@ -20,10 +20,7 @@ export async function withTimeout<T>(
     let timeoutId: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(
-            () =>
-                reject(
-                    new Error(`${label} timed out after ${timeoutMs} ms`),
-                ),
+            () => reject(new Error(`${label} timed out after ${timeoutMs} ms`)),
             timeoutMs,
         );
     });

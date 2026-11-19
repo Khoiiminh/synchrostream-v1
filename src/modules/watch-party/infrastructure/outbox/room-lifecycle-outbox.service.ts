@@ -61,7 +61,12 @@ export class RoomLifecycleOutboxService
         @Inject(ROOM_STATE_PROJECTION) projection: RoomStateProjectionPort,
         @Inject(MEDIA_SESSION) media: MediaSessionPort,
     ) {
-        this.reconcileRoom = new ReconcileRoom(repo, projection, media, this.logger);
+        this.reconcileRoom = new ReconcileRoom(
+            repo,
+            projection,
+            media,
+            this.logger,
+        );
         this.processEvent = new ProcessOutboxEvent(
             repo,
             this.reconcileRoom,
@@ -73,7 +78,10 @@ export class RoomLifecycleOutboxService
 
     onModuleInit(): void {
         // Recover pending and expired-lease work after startup, then keep draining.
-        this.timer = setInterval(() => void this.processBatch(), POLL_INTERVAL_MS);
+        this.timer = setInterval(
+            () => void this.processBatch(),
+            POLL_INTERVAL_MS,
+        );
         this.timer.unref?.();
         void this.processBatch();
 

@@ -1,10 +1,7 @@
 import type { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import { RoomLifecycleOutboxRepository } from "./infrastructure/persistence/room-lifecycle-outbox.repository.js";
-import type {
-    MediaSessionPort,
-    RoomStateProjectionPort,
-} from "./application/ports/collaborators.port.js";
+import type { MediaSessionPort } from "./application/ports/collaborators.port.js";
 import {
     connectTestPostgres,
     insertMovie,
@@ -57,14 +54,17 @@ function setup() {
         reconcileMediaSession: jest.fn().mockResolvedValue(undefined),
         endMediaSessionForRoom: jest.fn().mockResolvedValue(undefined),
         reconcileRoomParticipants: jest.fn(
-            async (_roomId: string, load: () => Promise<ReadonlySet<string>>) => {
+            async (
+                _roomId: string,
+                load: () => Promise<ReadonlySet<string>>,
+            ) => {
                 allowedIdentities.push(await load());
             },
         ),
     };
     const outbox = new RoomLifecycleOutboxService(
         repo,
-        projection as unknown as RoomStateProjectionPort,
+        projection,
         media as unknown as MediaSessionPort,
     );
     return { outbox, projection, media, allowedIdentities };
@@ -93,7 +93,13 @@ async function insertRoom(
          VALUES ($1, 'x', $2, $3, 5, $4::public.room_lifecycle_status, $4 = 'ACTIVE', 7,
                  NOW() - ($5 * INTERVAL '1 minute'))
          RETURNING id`,
-        [p.code ?? "ROOM01", p.ownerId ?? owner, movie, lifecycle, p.ageMinutes ?? 0],
+        [
+            p.code ?? "ROOM01",
+            p.ownerId ?? owner,
+            movie,
+            lifecycle,
+            p.ageMinutes ?? 0,
+        ],
     );
     return rows[0].id;
 }
@@ -112,7 +118,10 @@ async function room(id: string) {
         lifecycle_status: string;
         is_active: boolean;
         state_version: string;
-    }>(`SELECT lifecycle_status, is_active, state_version FROM public.rooms WHERE id = $1`, [id]);
+    }>(
+        `SELECT lifecycle_status, is_active, state_version FROM public.rooms WHERE id = $1`,
+        [id],
+    );
     return rows[0];
 }
 
@@ -142,26 +151,32 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
 
             await outbox.provisionRoomNow(roomId);
 
-            expect(projection.reconcileRoomState).toHaveBeenCalledWith("ROOM01", {
-                roomId,
-                lifecycleVersion: "7",
-                lifecycleStatus: "PROVISIONING",
-                roomCode: "ROOM01",
-                ownerId: owner,
-                movieId: movie,
-                maxParticipants: 5,
-                participantCount: 1,
-                status: "PAUSED",
-                playhead: 0,
-                lastUpdated: expect.any(Number),
-            });
+            expect(projection.reconcileRoomState).toHaveBeenCalledWith(
+                "ROOM01",
+                {
+                    roomId,
+                    lifecycleVersion: "7",
+                    lifecycleStatus: "PROVISIONING",
+                    roomCode: "ROOM01",
+                    ownerId: owner,
+                    movieId: movie,
+                    maxParticipants: 5,
+                    participantCount: 1,
+                    status: "PAUSED",
+                    playhead: 0,
+                    lastUpdated: expect.any(Number) as number,
+                },
+            );
             expect(await room(roomId)).toEqual({
                 lifecycle_status: "ACTIVE",
                 is_active: true,
                 state_version: "8",
             });
             expect(await events(roomId)).toEqual([
-                expect.objectContaining({ event_type: "ROOM_RECONCILE", status: "PENDING" }),
+                expect.objectContaining({
+                    event_type: "ROOM_RECONCILE",
+                    status: "PENDING",
+                }),
             ]);
         });
 
@@ -177,14 +192,20 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             expect(projection.replaceStaleRoomState).toHaveBeenCalledWith(
                 "ROOM01",
                 holder,
-                expect.objectContaining({ roomId, lifecycleStatus: "PROVISIONING" }),
+                expect.objectContaining({
+                    roomId,
+                    lifecycleStatus: "PROVISIONING",
+                }),
             );
             expect((await room(roomId)).lifecycle_status).toBe("ACTIVE");
         });
 
         it("PROVISIONING: takes over a key whose holder now has another code", async () => {
             const { outbox, projection } = setup();
-            const holder = await insertRoom("ACTIVE", { code: "OTHER1", ownerId: member });
+            const holder = await insertRoom("ACTIVE", {
+                code: "OTHER1",
+                ownerId: member,
+            });
             const roomId = await insertRoom("PROVISIONING", { code: "ROOM01" });
             projection.reconcileRoomState.mockResolvedValue(false);
             projection.getRoomState.mockResolvedValue({ roomId: holder });
@@ -219,7 +240,9 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             const { outbox, projection } = setup();
             const roomId = await insertRoom("PROVISIONING");
             projection.reconcileRoomState.mockResolvedValue(false);
-            projection.getRoomState.mockResolvedValue({ roomId: "holder-room" });
+            projection.getRoomState.mockResolvedValue({
+                roomId: "holder-room",
+            });
             jest.spyOn(repo, "findRoomCodeHolder").mockResolvedValueOnce({
                 room_code: "ROOM01",
                 lifecycle_status: "TERMINATING",
@@ -254,17 +277,23 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
 
             await outbox.provisionRoomNow(roomId);
 
-            expect(projection.reconcileRoomState).toHaveBeenCalledWith("ROOM01", {
+            expect(projection.reconcileRoomState).toHaveBeenCalledWith(
+                "ROOM01",
+                {
+                    roomId,
+                    lifecycleVersion: "7",
+                    lifecycleStatus: "ACTIVE",
+                    roomCode: "ROOM01",
+                    ownerId: owner,
+                    movieId: movie,
+                    maxParticipants: 5,
+                    participantCount: 1,
+                },
+            );
+            expect(media.reconcileRoomParticipants).toHaveBeenCalledWith(
                 roomId,
-                lifecycleVersion: "7",
-                lifecycleStatus: "ACTIVE",
-                roomCode: "ROOM01",
-                ownerId: owner,
-                movieId: movie,
-                maxParticipants: 5,
-                participantCount: 1,
-            });
-            expect(media.reconcileRoomParticipants).toHaveBeenCalledWith(roomId, expect.any(Function));
+                expect.any(Function),
+            );
             expect(allowedIdentities).toEqual([new Set([ownerMembership])]);
             expect((await room(roomId)).state_version).toBe("7");
         });
@@ -273,7 +302,9 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             const { outbox, projection, media } = setup();
             const roomId = await insertRoom("ACTIVE");
             projection.reconcileRoomState.mockResolvedValue(false);
-            projection.getRoomState.mockResolvedValue({ roomId: "holder-room" });
+            projection.getRoomState.mockResolvedValue({
+                roomId: "holder-room",
+            });
             jest.spyOn(repo, "findRoomCodeHolder").mockResolvedValueOnce({
                 room_code: "ROOM01",
                 lifecycle_status: "ACTIVE",
@@ -292,11 +323,14 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             await outbox.provisionRoomNow(roomId);
 
             expect(media.endMediaSessionForRoom).toHaveBeenCalledWith(roomId);
-            expect(projection.reconcileRoomState).toHaveBeenCalledWith("ROOM01", {
-                roomId,
-                lifecycleVersion: "7",
-                lifecycleStatus: "TERMINATED",
-            });
+            expect(projection.reconcileRoomState).toHaveBeenCalledWith(
+                "ROOM01",
+                {
+                    roomId,
+                    lifecycleVersion: "7",
+                    lifecycleStatus: "TERMINATED",
+                },
+            );
             expect(await room(roomId)).toMatchObject({
                 lifecycle_status: "TERMINATED",
                 state_version: "8",
@@ -307,9 +341,13 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
         it("TERMINATING: a media failure leaves the room TERMINATING for a retry", async () => {
             const { outbox, media } = setup();
             const roomId = await insertRoom("TERMINATING");
-            media.endMediaSessionForRoom.mockRejectedValue(new Error("livekit down"));
+            media.endMediaSessionForRoom.mockRejectedValue(
+                new Error("livekit down"),
+            );
 
-            await expect(outbox.provisionRoomNow(roomId)).rejects.toThrow("livekit down");
+            await expect(outbox.provisionRoomNow(roomId)).rejects.toThrow(
+                "livekit down",
+            );
             expect((await room(roomId)).lifecycle_status).toBe("TERMINATING");
         });
 
@@ -322,7 +360,10 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             expect(projection.reconcileRoomState).toHaveBeenCalledTimes(1);
             expect(projection.reconcileRoomState).toHaveBeenCalledWith(
                 "ROOM01",
-                expect.objectContaining({ roomId, lifecycleStatus: "TERMINATED" }),
+                expect.objectContaining({
+                    roomId,
+                    lifecycleStatus: "TERMINATED",
+                }),
             );
             expect(media.reconcileRoomParticipants).not.toHaveBeenCalled();
             expect(media.endMediaSessionForRoom).not.toHaveBeenCalled();
@@ -330,7 +371,9 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
 
         it("an unknown room is a no-op", async () => {
             const { outbox, projection } = setup();
-            await outbox.provisionRoomNow("00000000-0000-4000-8000-000000000000");
+            await outbox.provisionRoomNow(
+                "00000000-0000-4000-8000-000000000000",
+            );
             expect(projection.reconcileRoomState).not.toHaveBeenCalled();
         });
     });
@@ -344,14 +387,20 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             await drive(outbox).processBatch();
 
             expect(await events(roomId)).toEqual([
-                expect.objectContaining({ status: "COMPLETED", attempts: 1, last_error: null }),
+                expect.objectContaining({
+                    status: "COMPLETED",
+                    attempts: 1,
+                    last_error: null,
+                }),
             ]);
         });
 
         it("a failure is retried later with the error recorded", async () => {
             const { outbox, media } = setup();
             const roomId = await insertRoom("TERMINATING");
-            media.endMediaSessionForRoom.mockRejectedValue(new Error("livekit down"));
+            media.endMediaSessionForRoom.mockRejectedValue(
+                new Error("livekit down"),
+            );
             await outbox.requestRoomReconciliation(roomId);
 
             await drive(outbox).processBatch();
@@ -372,7 +421,9 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
         it("parks an event as DEAD once it has been attempted 20 times", async () => {
             const { outbox, media } = setup();
             const roomId = await insertRoom("TERMINATING");
-            media.endMediaSessionForRoom.mockRejectedValue(new Error("still down"));
+            media.endMediaSessionForRoom.mockRejectedValue(
+                new Error("still down"),
+            );
             await pg.query(
                 `INSERT INTO public.room_lifecycle_outbox (event_type, aggregate_id, attempts)
                  VALUES ('ROOM_RECONCILE', $1, 19)`,
@@ -382,7 +433,11 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             await drive(outbox).processBatch();
 
             expect(await events(roomId)).toEqual([
-                expect.objectContaining({ status: "DEAD", attempts: 20, last_error: "still down" }),
+                expect.objectContaining({
+                    status: "DEAD",
+                    attempts: 20,
+                    last_error: "still down",
+                }),
             ]);
         });
 
@@ -397,7 +452,10 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
 
             await drive(outbox).processBatch();
 
-            expect(media.reconcileMediaSession).toHaveBeenCalledWith(sessionId, expect.any(Date));
+            expect(media.reconcileMediaSession).toHaveBeenCalledWith(
+                sessionId,
+                expect.any(Date),
+            );
             expect(await events(sessionId)).toEqual([
                 expect.objectContaining({ status: "COMPLETED" }),
             ]);
@@ -406,7 +464,8 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
         it("drains at most 10 events per batch, oldest first", async () => {
             const { outbox } = setup();
             const roomId = await insertRoom("TERMINATED");
-            for (let i = 0; i < 12; i += 1) await outbox.requestRoomReconciliation(roomId);
+            for (let i = 0; i < 12; i += 1)
+                await outbox.requestRoomReconciliation(roomId);
 
             await drive(outbox).processBatch();
 
@@ -420,12 +479,19 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
         it("terminates PROVISIONING rooms older than 10 minutes and ends their memberships", async () => {
             const { outbox } = setup();
             const stale = await insertRoom("PROVISIONING", { ageMinutes: 11 });
-            const fresh = await insertRoom("PROVISIONING", { code: "FRESH1", ageMinutes: 5, ownerId: member });
+            const fresh = await insertRoom("PROVISIONING", {
+                code: "FRESH1",
+                ageMinutes: 5,
+                ownerId: member,
+            });
             await addMember(stale, owner);
 
             await drive(outbox).sweep();
 
-            expect(await room(stale)).toMatchObject({ lifecycle_status: "TERMINATING", state_version: "8" });
+            expect(await room(stale)).toMatchObject({
+                lifecycle_status: "TERMINATING",
+                state_version: "8",
+            });
             const { rows } = await pg.query(
                 `SELECT 1 FROM public.room_participants WHERE room_id = $1 AND is_active`,
                 [stale],
@@ -433,8 +499,12 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             expect(rows).toHaveLength(0);
             expect((await room(fresh)).lifecycle_status).toBe("PROVISIONING");
             // Each transitional room has exactly one live event afterwards.
-            expect(await events(stale)).toEqual([expect.objectContaining({ status: "PENDING" })]);
-            expect(await events(fresh)).toEqual([expect.objectContaining({ status: "PENDING" })]);
+            expect(await events(stale)).toEqual([
+                expect.objectContaining({ status: "PENDING" }),
+            ]);
+            expect(await events(fresh)).toEqual([
+                expect.objectContaining({ status: "PENDING" }),
+            ]);
         });
 
         it("re-enqueues a transitional room whose event went DEAD, but not twice", async () => {
@@ -449,7 +519,10 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             await drive(outbox).sweep();
             await drive(outbox).sweep();
 
-            expect((await events(roomId)).map((e) => e.status)).toEqual(["DEAD", "PENDING"]);
+            expect((await events(roomId)).map((e) => e.status)).toEqual([
+                "DEAD",
+                "PENDING",
+            ]);
         });
 
         it("leaves ACTIVE and TERMINATED rooms alone", async () => {
@@ -476,7 +549,10 @@ describe("RoomLifecycleOutboxService on real Postgres", () => {
             await drive(outbox).sweep();
 
             expect(await events(rows[0].id)).toEqual([
-                expect.objectContaining({ event_type: "LIVEKIT_SESSION_RECONCILE", status: "PENDING" }),
+                expect.objectContaining({
+                    event_type: "LIVEKIT_SESSION_RECONCILE",
+                    status: "PENDING",
+                }),
             ]);
             expect(await events(rows[1].id)).toEqual([]);
         });

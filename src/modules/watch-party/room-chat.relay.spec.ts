@@ -1,6 +1,5 @@
 import { Logger } from "@nestjs/common";
 import { RoomChatRelay } from "./room-chat.relay.js";
-import type { ChatStore } from "./application/ports/collaborators.port.js";
 import { CHAT_HISTORY_LIMIT, CHAT_RATE_RULE } from "./domain/chat-policy.js";
 
 /*
@@ -11,13 +10,12 @@ import { CHAT_HISTORY_LIMIT, CHAT_RATE_RULE } from "./domain/chat-policy.js";
 
 function setup() {
     const store = {
-        insertMessage: jest.fn(async () => ({
-            id: "41",
-            sent_at: new Date(5_000),
-        })),
-        findRecentMessages: jest.fn(async () => []),
+        insertMessage: jest.fn(() =>
+            Promise.resolve({ id: "41", sent_at: new Date(5_000) }),
+        ),
+        findRecentMessages: jest.fn(() => Promise.resolve([])),
     };
-    const relay = new RoomChatRelay(store as unknown as ChatStore);
+    const relay = new RoomChatRelay(store);
     return { relay, store };
 }
 
@@ -92,20 +90,23 @@ describe("RoomChatRelay.submit", () => {
         ["not text", 42, "Message must be text."],
         ["blank", "   ", "Message is empty."],
         ["too long", "x".repeat(501), "Message is longer than 500 characters."],
-    ])("rejects a %s message without persisting or counting it", async (_l, raw, reason) => {
-        const { relay, store } = setup();
+    ])(
+        "rejects a %s message without persisting or counting it",
+        async (_l, raw, reason) => {
+            const { relay, store } = setup();
 
-        expect(await send(relay, { rawMessage: raw })).toEqual({
-            accepted: false,
-            ack: { ok: false, code: "INVALID_MESSAGE", message: reason },
-        });
-        expect(store.insertMessage).not.toHaveBeenCalled();
+            expect(await send(relay, { rawMessage: raw })).toEqual({
+                accepted: false,
+                ack: { ok: false, code: "INVALID_MESSAGE", message: reason },
+            });
+            expect(store.insertMessage).not.toHaveBeenCalled();
 
-        // Not counted: a full allowance of valid messages still goes through.
-        for (let i = 0; i < CHAT_RATE_RULE.max; i += 1) {
-            expect((await send(relay)).accepted).toBe(true);
-        }
-    });
+            // Not counted: a full allowance of valid messages still goes through.
+            for (let i = 0; i < CHAT_RATE_RULE.max; i += 1) {
+                expect((await send(relay)).accepted).toBe(true);
+            }
+        },
+    );
 
     it("rate-limits per sender per room and recovers after the window", async () => {
         const { relay, store } = setup();
@@ -170,9 +171,26 @@ describe("RoomChatRelay.getRecentHistory", () => {
         ] as never);
 
         expect(await relay.getRecentHistory("room-1")).toEqual([
-            { id: "1", userId: "user-1", username: "alice", message: "first", timestamp: 10, clientMessageId: null },
-            { id: "2", userId: null, username: "Unknown", message: "second", timestamp: 20, clientMessageId: null },
+            {
+                id: "1",
+                userId: "user-1",
+                username: "alice",
+                message: "first",
+                timestamp: 10,
+                clientMessageId: null,
+            },
+            {
+                id: "2",
+                userId: null,
+                username: "Unknown",
+                message: "second",
+                timestamp: 20,
+                clientMessageId: null,
+            },
         ]);
-        expect(store.findRecentMessages).toHaveBeenCalledWith("room-1", CHAT_HISTORY_LIMIT);
+        expect(store.findRecentMessages).toHaveBeenCalledWith(
+            "room-1",
+            CHAT_HISTORY_LIMIT,
+        );
     });
 });

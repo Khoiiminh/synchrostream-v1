@@ -74,7 +74,9 @@ export class CreateRoom {
         });
 
         const requestedRoomCode =
-            p.dto.roomCode == null ? undefined : normalizeRoomCode(p.dto.roomCode);
+            p.dto.roomCode == null
+                ? undefined
+                : normalizeRoomCode(p.dto.roomCode);
 
         // Enforced here as well as on the DTO, so every caller is covered.
         assertUsableRoomPassword(p.dto.passwordPlain);
@@ -121,7 +123,8 @@ export class CreateRoom {
                         );
 
                         // Check for membership in someone else's room.
-                        const currentRoom = await findCurrentRoom(this.repo, 
+                        const currentRoom = await findCurrentRoom(
+                            this.repo,
                             transactionClient,
                             p.ownerId,
                         );
@@ -195,7 +198,8 @@ export class CreateRoom {
                 if (error instanceof ActiveMembershipConflict) {
                     // A concurrent join committed first; report which room, so the
                     // client can offer to switch.
-                    const currentRoom = await findCurrentRoom(this.repo, 
+                    const currentRoom = await findCurrentRoom(
+                        this.repo,
                         undefined,
                         p.ownerId,
                     );

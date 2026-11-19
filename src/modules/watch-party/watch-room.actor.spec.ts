@@ -107,7 +107,9 @@ describe("WatchRoomActor", () => {
             actor.registerParticipant(node("u2"));
 
             expect(() =>
-                actor.registerParticipant(node("u2", { participantId: "again" })),
+                actor.registerParticipant(
+                    node("u2", { participantId: "again" }),
+                ),
             ).not.toThrow();
             expect(actor.getParticipantCount()).toBe(2);
         });

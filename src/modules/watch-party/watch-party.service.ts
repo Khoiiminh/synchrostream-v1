@@ -17,7 +17,10 @@ import { JoinRoom } from "./application/use-cases/join-room.js";
 import { LeaveRoom } from "./application/use-cases/leave-room.js";
 import { ExpireMembership } from "./application/use-cases/expire-membership.js";
 import { RoomQueries } from "./application/use-cases/room-queries.js";
-import type { CreateRoomDto, JoinRoomDto } from "./presentation/dto/room.dto.js";
+import type {
+    CreateRoomDto,
+    JoinRoomDto,
+} from "./presentation/dto/room.dto.js";
 import { withHttpErrors } from "./presentation/error-mapper.js";
 
 // Kept for existing importers (controller, gateway, specs).
@@ -51,7 +54,12 @@ export class WatchPartyService {
     ) {
         // One logger context for all use cases, so log lines read as before.
         const logger = new Logger(WatchPartyService.name);
-        this.createRoom = new CreateRoom(store, lifecycleOutbox, passwords, logger);
+        this.createRoom = new CreateRoom(
+            store,
+            lifecycleOutbox,
+            passwords,
+            logger,
+        );
         this.joinRoom = new JoinRoom(
             store,
             lifecycleOutbox,
@@ -61,7 +69,11 @@ export class WatchPartyService {
             logger,
         );
         this.leaveRoom = new LeaveRoom(store, lifecycleOutbox, logger);
-        this.expireMembership = new ExpireMembership(store, lifecycleOutbox, logger);
+        this.expireMembership = new ExpireMembership(
+            store,
+            lifecycleOutbox,
+            logger,
+        );
         this.queries = new RoomQueries(store, logger);
     }
 
@@ -77,7 +89,9 @@ export class WatchPartyService {
 
     /** See ExpireMembership (reconnection grace expired). */
     disassociateParticipant(participantId: string) {
-        return withHttpErrors(() => this.expireMembership.execute(participantId));
+        return withHttpErrors(() =>
+            this.expireMembership.execute(participantId),
+        );
     }
 
     /** See LeaveRoom. */
@@ -86,7 +100,9 @@ export class WatchPartyService {
     }
 
     getRoomDetailsByCode(roomCode: string) {
-        return withHttpErrors(() => this.queries.getRoomDetailsByCode(roomCode));
+        return withHttpErrors(() =>
+            this.queries.getRoomDetailsByCode(roomCode),
+        );
     }
 
     assertRoomActive(roomId: string): Promise<void> {
@@ -98,6 +114,8 @@ export class WatchPartyService {
     }
 
     getRoomProjectionState(roomId: string) {
-        return withHttpErrors(() => this.queries.getRoomProjectionState(roomId));
+        return withHttpErrors(() =>
+            this.queries.getRoomProjectionState(roomId),
+        );
     }
 }

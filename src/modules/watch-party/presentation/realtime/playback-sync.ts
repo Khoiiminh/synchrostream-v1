@@ -21,7 +21,8 @@ export class PlaybackSync {
             ReturnType<WatchPartyService["getRoomProjectionState"]>
         >;
         try {
-            room = await this.ctx.watchPartyService.getRoomProjectionState(roomId);
+            room =
+                await this.ctx.watchPartyService.getRoomProjectionState(roomId);
         } catch (error) {
             this.ctx.logger.warn({
                 message:
@@ -88,7 +89,9 @@ export class PlaybackSync {
             );
         }
 
-        const metadata = this.ctx.registry.socketToParticipantMap.get(socket.id);
+        const metadata = this.ctx.registry.socketToParticipantMap.get(
+            socket.id,
+        );
 
         if (!metadata) {
             throw new BadRequestException(

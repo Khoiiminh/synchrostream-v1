@@ -64,7 +64,9 @@ describe("RoomAccessQuery", () => {
         const roomId = await insertRoom("ACTIVE");
         const membershipId = await addMember(roomId, member);
 
-        expect(await rooms.findActiveMembershipId(roomId, member)).toBe(membershipId);
+        expect(await rooms.findActiveMembershipId(roomId, member)).toBe(
+            membershipId,
+        );
         expect(await rooms.isRoomActive(roomId)).toBe(true);
         expect(await rooms.findActiveRoomId(roomId)).toBe(roomId);
         expect(await rooms.findActiveParticipant(roomId, member)).toEqual({
@@ -72,8 +74,14 @@ describe("RoomAccessQuery", () => {
             user_id: member,
             room_id: roomId,
         });
-        expect(await rooms.findActiveRoom(roomId)).toEqual({ id: roomId, max_participants: 4 });
-        expect(await rooms.findRoomActivity(roomId)).toEqual({ id: roomId, is_active: true });
+        expect(await rooms.findActiveRoom(roomId)).toEqual({
+            id: roomId,
+            max_participants: 4,
+        });
+        expect(await rooms.findRoomActivity(roomId)).toEqual({
+            id: roomId,
+            is_active: true,
+        });
     });
 
     it.each(["PROVISIONING", "TERMINATING", "TERMINATED"])(
@@ -82,12 +90,19 @@ describe("RoomAccessQuery", () => {
             const roomId = await insertRoom(lifecycle);
             await addMember(roomId, member);
 
-            expect(await rooms.findActiveMembershipId(roomId, member)).toBeUndefined();
+            expect(
+                await rooms.findActiveMembershipId(roomId, member),
+            ).toBeUndefined();
             expect(await rooms.isRoomActive(roomId)).toBe(false);
             expect(await rooms.findActiveRoomId(roomId)).toBeUndefined();
-            expect(await rooms.findActiveParticipant(roomId, member)).toBeUndefined();
+            expect(
+                await rooms.findActiveParticipant(roomId, member),
+            ).toBeUndefined();
             expect(await rooms.findActiveRoom(roomId)).toBeUndefined();
-            expect(await rooms.findRoomActivity(roomId)).toEqual({ id: roomId, is_active: false });
+            expect(await rooms.findRoomActivity(roomId)).toEqual({
+                id: roomId,
+                is_active: false,
+            });
         },
     );
 
@@ -95,8 +110,12 @@ describe("RoomAccessQuery", () => {
         const roomId = await insertRoom("ACTIVE");
         const membershipId = await addMember(roomId, member, false);
 
-        expect(await rooms.findActiveMembershipId(roomId, member)).toBeUndefined();
-        expect(await rooms.findActiveParticipant(roomId, member)).toBeUndefined();
+        expect(
+            await rooms.findActiveMembershipId(roomId, member),
+        ).toBeUndefined();
+        expect(
+            await rooms.findActiveParticipant(roomId, member),
+        ).toBeUndefined();
         expect(await rooms.findRoomParticipant(roomId, member)).toEqual({
             participant_id: membershipId,
             user_id: member,
@@ -107,7 +126,9 @@ describe("RoomAccessQuery", () => {
     it("unknown rooms and users read as absent", async () => {
         expect(await rooms.findActiveRoom(MISSING)).toBeUndefined();
         expect(await rooms.findRoomActivity(MISSING)).toBeUndefined();
-        expect(await rooms.findRoomParticipant(MISSING, member)).toBeUndefined();
+        expect(
+            await rooms.findRoomParticipant(MISSING, member),
+        ).toBeUndefined();
         expect(await rooms.isRoomActive(MISSING)).toBe(false);
     });
 
@@ -117,9 +138,13 @@ describe("RoomAccessQuery", () => {
         const order: string[] = [];
 
         let signalLocked!: () => void;
-        const firstHasLock = new Promise<void>((resolve) => (signalLocked = resolve));
+        const firstHasLock = new Promise<void>(
+            (resolve) => (signalLocked = resolve),
+        );
         let release!: () => void;
-        const releaseFirst = new Promise<void>((resolve) => (release = resolve));
+        const releaseFirst = new Promise<void>(
+            (resolve) => (release = resolve),
+        );
 
         const first = pg.withTransaction(async (tx) => {
             expect(await rooms.lockActiveRoom(tx, active)).toBe(true);
@@ -158,27 +183,47 @@ describe("MediaSessionEvents", () => {
             await events.enqueueDelayedSessionReconcile(tx, delayed);
         });
 
-        const { rows } = await pg.query<{ aggregate_id: string; status: string; due_now: boolean; delay_s: number }>(
+        const { rows } = await pg.query<{
+            aggregate_id: string;
+            status: string;
+            due_now: boolean;
+            delay_s: number;
+        }>(
             `SELECT aggregate_id, status, next_attempt_at <= NOW() AS due_now,
                     ROUND(EXTRACT(EPOCH FROM next_attempt_at - created_at))::int AS delay_s
              FROM public.room_lifecycle_outbox WHERE event_type = 'LIVEKIT_SESSION_RECONCILE'
              ORDER BY delay_s`,
         );
         expect(rows).toEqual([
-            { aggregate_id: immediate, status: "PENDING", due_now: true, delay_s: 0 },
-            { aggregate_id: delayed, status: "PENDING", due_now: false, delay_s: 35 },
+            {
+                aggregate_id: immediate,
+                status: "PENDING",
+                due_now: true,
+                delay_s: 0,
+            },
+            {
+                aggregate_id: delayed,
+                status: "PENDING",
+                due_now: false,
+                delay_s: 35,
+            },
         ]);
     });
 
     it("rolls back with the caller's transaction", async () => {
         await pg
             .withTransaction(async (tx) => {
-                await events.enqueueSessionReconcile(tx, "33333333-3333-4333-8333-333333333333");
+                await events.enqueueSessionReconcile(
+                    tx,
+                    "33333333-3333-4333-8333-333333333333",
+                );
                 throw new Error("caller failed");
             })
             .catch(() => undefined);
 
-        const { rows } = await pg.query(`SELECT 1 FROM public.room_lifecycle_outbox`);
+        const { rows } = await pg.query(
+            `SELECT 1 FROM public.room_lifecycle_outbox`,
+        );
         expect(rows).toHaveLength(0);
     });
 });

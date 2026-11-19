@@ -242,8 +242,9 @@ export class WatchPartyRepository implements WatchPartyStore {
         userId: string,
     ): Promise<ParticipantRow> {
         const db = this.executor(tx);
-        const participantResult = await db.query<ParticipantRow>(
-            `
+        const participantResult = await db
+            .query<ParticipantRow>(
+                `
                             INSERT INTO public.room_participants (
                                 room_id,
                                 user_id
@@ -255,8 +256,9 @@ export class WatchPartyRepository implements WatchPartyStore {
                                 user_id,
                                 has_control_privilege
                             `,
-            [roomId, userId],
-        ).catch(translateUniqueViolation);
+                [roomId, userId],
+            )
+            .catch(translateUniqueViolation);
         return participantResult.rows[0];
     }
 

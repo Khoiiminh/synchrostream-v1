@@ -36,10 +36,7 @@ export const PRESENCE_SWEEP_MS = 15_000;
  */
 export class RoomRuntimeRegistry {
     readonly runningActors = new Map<string, WatchRoomActor>();
-    readonly socketToParticipantMap = new Map<
-        string,
-        BindingMetadata
-    >();
+    readonly socketToParticipantMap = new Map<string, BindingMetadata>();
 
     readonly pendingCleanups = new Map<string, NodeJS.Timeout>();
 
@@ -73,8 +70,7 @@ export class RoomRuntimeRegistry {
             socketId,
             metadata,
         ] of this.socketToParticipantMap.entries()) {
-            if (this.isConnected(socketId))
-                bindings.push(metadata);
+            if (this.isConnected(socketId)) bindings.push(metadata);
         }
         return bindings;
     }

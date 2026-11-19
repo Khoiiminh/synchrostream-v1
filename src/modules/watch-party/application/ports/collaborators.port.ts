@@ -1,4 +1,7 @@
-import type { ChatHistoryRow, InsertedChatRow } from "../../watch-party.types.js";
+import type {
+    ChatHistoryRow,
+    InsertedChatRow,
+} from "../../watch-party.types.js";
 import type { Tx } from "./transaction.js";
 
 /** Hashes and checks room passwords. Adapter: bcrypt. */
@@ -71,7 +74,9 @@ export interface PresencePort {
         members: Array<{ roomId: string; userId: string }>,
         ttlSeconds: number,
     ): Promise<void>;
-    getPresence(members: Array<{ roomId: string; userId: string }>): Promise<boolean[]>;
+    getPresence(
+        members: Array<{ roomId: string; userId: string }>,
+    ): Promise<boolean[]>;
     clearPresence(roomId: string, userId: string): Promise<void>;
 }
 
@@ -80,7 +85,8 @@ export interface PresencePort {
  * store: the room projection, playback writes, sync pulses and presence.
  * Adapter: RedisProvider.
  */
-export interface RealtimeStatePort extends RoomStateProjectionPort, PresencePort {
+export interface RealtimeStatePort
+    extends RoomStateProjectionPort, PresencePort {
     /** Playback write, accepted only while `expectedRoomId` owns the key. */
     updateRoomState(
         roomCode: string,
@@ -99,5 +105,8 @@ export interface ChatStore {
         message: string;
     }): Promise<InsertedChatRow>;
     /** The room's latest `limit` messages, oldest first. */
-    findRecentMessages(roomId: string, limit: number): Promise<ChatHistoryRow[]>;
+    findRecentMessages(
+        roomId: string,
+        limit: number,
+    ): Promise<ChatHistoryRow[]>;
 }

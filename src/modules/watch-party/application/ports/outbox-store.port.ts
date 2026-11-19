@@ -18,7 +18,10 @@ export interface OutboxStore {
     withTransaction<T>(work: (tx: Tx) => Promise<T>): Promise<T>;
 
     // Events
-    enqueueRoomReconciliation(tx: Tx | undefined, roomId: string): Promise<void>;
+    enqueueRoomReconciliation(
+        tx: Tx | undefined,
+        roomId: string,
+    ): Promise<void>;
     /** Leases the oldest due event (or one whose lease expired). */
     claimNextEvent(
         tx: Tx | undefined,
@@ -42,7 +45,10 @@ export interface OutboxStore {
         tx: Tx | undefined,
         timeoutMinutes: number,
     ): Promise<IdRow[]>;
-    deactivateActiveParticipants(tx: Tx | undefined, roomId: string): Promise<void>;
+    deactivateActiveParticipants(
+        tx: Tx | undefined,
+        roomId: string,
+    ): Promise<void>;
     requeueUnconvergedRooms(tx: Tx | undefined): Promise<number | null>;
     requeueStuckMediaSessions(
         tx: Tx | undefined,

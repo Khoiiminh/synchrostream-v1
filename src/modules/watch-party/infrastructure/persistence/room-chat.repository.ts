@@ -1,6 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import type { ChatHistoryRow, InsertedChatRow } from "../../watch-party.types.js";
+import type {
+    ChatHistoryRow,
+    InsertedChatRow,
+} from "../../watch-party.types.js";
 import type { ChatStore } from "../../application/ports/collaborators.port.js";
 
 /**

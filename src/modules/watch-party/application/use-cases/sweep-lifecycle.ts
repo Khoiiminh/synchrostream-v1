@@ -26,16 +26,12 @@ export class SweepLifecycle {
         await this.repo.withTransaction(async (client) => {
             if (!(await this.repo.tryAcquireSweeperLock(client))) return;
 
-            const timedOut =
-                await this.repo.terminateTimedOutProvisioningRooms(
-                    client,
-                    PROVISIONING_TIMEOUT_MINUTES,
-                );
+            const timedOut = await this.repo.terminateTimedOutProvisioningRooms(
+                client,
+                PROVISIONING_TIMEOUT_MINUTES,
+            );
             for (const room of timedOut) {
-                await this.repo.deactivateActiveParticipants(
-                    client,
-                    room.id,
-                );
+                await this.repo.deactivateActiveParticipants(client, room.id);
                 await this.repo.enqueueRoomReconciliation(client, room.id);
                 this.logger.warn({
                     message:
@@ -51,11 +47,10 @@ export class SweepLifecycle {
             // Rooms without lifecycle states before v7 cannot be told apart by
             // provider; only transitional or orphaned sessions are touched, and
             // ending one deletes a LiveKit room by its id (404 = success).
-            const requeuedSessions =
-                await this.repo.requeueStuckMediaSessions(
-                    client,
-                    STUCK_MEDIA_SESSION_MINUTES,
-                );
+            const requeuedSessions = await this.repo.requeueStuckMediaSessions(
+                client,
+                STUCK_MEDIA_SESSION_MINUTES,
+            );
 
             const pruned = await this.repo.pruneCompletedEvents(
                 client,

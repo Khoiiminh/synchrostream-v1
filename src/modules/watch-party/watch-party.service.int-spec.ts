@@ -1,12 +1,10 @@
 import { HttpException } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import type { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import type { AttemptLimiter } from "@/shared/infrastructure/cache/attempt-limiter.js";
 import { WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyRepository } from "./infrastructure/persistence/watch-party.repository.js";
 import { RoomLifecycleOutboxRepository } from "./infrastructure/persistence/room-lifecycle-outbox.repository.js";
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
-import type { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import {
     connectTestPostgres,
     insertMovie,
@@ -60,7 +58,9 @@ function makeService() {
             outboxRepo.enqueueRoomReconciliation(tx, roomId),
         // Inline provisioning needs LiveKit and Redis; the room stays
         // PROVISIONING exactly as when that step fails in production.
-        provisionRoomNow: jest.fn().mockRejectedValue(new Error("not in tests")),
+        provisionRoomNow: jest
+            .fn()
+            .mockRejectedValue(new Error("not in tests")),
     };
     const limiter = {
         assertAllowed: jest.fn(),
@@ -69,8 +69,8 @@ function makeService() {
     };
     return new WatchPartyService(
         new WatchPartyRepository(pg),
-        outbox as unknown as RoomLifecycleOutboxService,
-        limiter as unknown as AttemptLimiter,
+        outbox,
+        limiter,
         new BcryptPasswordHasher(),
     );
 }
@@ -174,7 +174,11 @@ describe("WatchPartyService on real Postgres", () => {
             const service = makeService();
 
             const created = await service.createRoomSession({
-                dto: { passwordPlain: "room-pass", movieId: movie, roomCode: "ab12cd" },
+                dto: {
+                    passwordPlain: "room-pass",
+                    movieId: movie,
+                    roomCode: "ab12cd",
+                },
                 ownerId: owner,
             });
 
@@ -209,7 +213,11 @@ describe("WatchPartyService on real Postgres", () => {
                         ownerId: owner,
                     }),
                 ),
-            ).toMatchObject({ ok: false, status: 409, code: "ACTIVE_OWNER_ROOM" });
+            ).toMatchObject({
+                ok: false,
+                status: 409,
+                code: "ACTIVE_OWNER_ROOM",
+            });
         });
 
         it("two concurrent creates by one owner: the advisory lock lets exactly one through", async () => {
@@ -222,32 +230,58 @@ describe("WatchPartyService on real Postgres", () => {
                     }),
                 );
 
-            const results = await Promise.all([attempt(), attempt(), attempt()]);
+            const results = await Promise.all([
+                attempt(),
+                attempt(),
+                attempt(),
+            ]);
 
             expect(results.filter((r) => r.ok)).toHaveLength(1);
             expect(results.filter((r) => !r.ok)).toEqual([
-                expect.objectContaining({ status: 409, code: "ACTIVE_OWNER_ROOM" }),
-                expect.objectContaining({ status: 409, code: "ACTIVE_OWNER_ROOM" }),
+                expect.objectContaining({
+                    status: 409,
+                    code: "ACTIVE_OWNER_ROOM",
+                }),
+                expect.objectContaining({
+                    status: 409,
+                    code: "ACTIVE_OWNER_ROOM",
+                }),
             ]);
-            const rooms = await pg.query(`SELECT 1 FROM public.rooms WHERE owner_id = $1`, [owner]);
+            const rooms = await pg.query(
+                `SELECT 1 FROM public.rooms WHERE owner_id = $1`,
+                [owner],
+            );
             expect(rooms.rowCount).toBe(1);
         });
 
         it("a requested code held by a live or TERMINATING room is ROOM_CODE_IN_USE; TERMINATED frees it", async () => {
             const service = makeService();
-            const first = await createActiveRoom(service, { roomCode: "SAME01" });
+            const first = await createActiveRoom(service, {
+                roomCode: "SAME01",
+            });
             const second = () =>
                 status(
                     service.createRoomSession({
-                        dto: { passwordPlain: "room-pass", movieId: movie, roomCode: "same01" },
+                        dto: {
+                            passwordPlain: "room-pass",
+                            movieId: movie,
+                            roomCode: "same01",
+                        },
                         ownerId: alice,
                     }),
                 );
 
-            expect(await second()).toMatchObject({ ok: false, status: 409, code: "ROOM_CODE_IN_USE" });
+            expect(await second()).toMatchObject({
+                ok: false,
+                status: 409,
+                code: "ROOM_CODE_IN_USE",
+            });
 
             await setLifecycle(first.roomId, "TERMINATING");
-            expect(await second()).toMatchObject({ ok: false, code: "ROOM_CODE_IN_USE" });
+            expect(await second()).toMatchObject({
+                ok: false,
+                code: "ROOM_CODE_IN_USE",
+            });
 
             await setLifecycle(first.roomId, "TERMINATED");
             expect(await second()).toEqual({ ok: true });
@@ -278,7 +312,9 @@ describe("WatchPartyService on real Postgres", () => {
             const first = await createActiveRoom(service);
             await service.leaveRoomSession(owner, first.roomId);
 
-            expect((await room(first.roomId)).lifecycle_status).toBe("TERMINATING");
+            expect((await room(first.roomId)).lifecycle_status).toBe(
+                "TERMINATING",
+            );
             expect(
                 await status(
                     service.createRoomSession({
@@ -298,13 +334,17 @@ describe("WatchPartyService on real Postgres", () => {
                 ownerId: owner,
             });
 
-            expect(await status(join(service, alice, created.roomCode))).toMatchObject({
+            expect(
+                await status(join(service, alice, created.roomCode)),
+            ).toMatchObject({
                 ok: false,
                 status: 503,
             });
 
             await activate(created.roomId);
-            expect(await status(join(service, alice, created.roomCode))).toEqual({ ok: true });
+            expect(
+                await status(join(service, alice, created.roomCode)),
+            ).toEqual({ ok: true });
         });
 
         it("an unknown or TERMINATED room code is 404", async () => {
@@ -312,10 +352,14 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             await setLifecycle(created.roomId, "TERMINATED");
 
-            expect(await status(join(service, alice, created.roomCode))).toMatchObject({
+            expect(
+                await status(join(service, alice, created.roomCode)),
+            ).toMatchObject({
                 status: 404,
             });
-            expect(await status(join(service, alice, "NOPE00"))).toMatchObject({ status: 404 });
+            expect(await status(join(service, alice, "NOPE00"))).toMatchObject({
+                status: 404,
+            });
         });
 
         it("a first join creates a membership, bumps state_version and enqueues reconciliation", async () => {
@@ -323,7 +367,11 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             const before = Number((await room(created.roomId)).state_version);
 
-            const joined = await join(service, alice, created.roomCode.toLowerCase());
+            const joined = await join(
+                service,
+                alice,
+                created.roomCode.toLowerCase(),
+            );
 
             expect(joined).toMatchObject({
                 createdMembership: true,
@@ -331,7 +379,9 @@ describe("WatchPartyService on real Postgres", () => {
                 participantCount: 2,
                 lifecycleVersion: String(before + 1),
             });
-            expect(Number((await room(created.roomId)).state_version)).toBe(before + 1);
+            expect(Number((await room(created.roomId)).state_version)).toBe(
+                before + 1,
+            );
             expect((await outboxEvents(created.roomId)).length).toBe(2);
         });
 
@@ -339,11 +389,16 @@ describe("WatchPartyService on real Postgres", () => {
             const service = makeService();
             const created = await createActiveRoom(service);
 
-            expect(await status(join(service, alice, created.roomCode, "wrong"))).toMatchObject({
+            expect(
+                await status(join(service, alice, created.roomCode, "wrong")),
+            ).toMatchObject({
                 status: 400,
-                message: "Security credentials verification failure: Authentication rejected.",
+                message:
+                    "Security credentials verification failure: Authentication rejected.",
             });
-            expect((await memberships(created.roomId)).map((m) => m.user_id)).toEqual([owner]);
+            expect(
+                (await memberships(created.roomId)).map((m) => m.user_id),
+            ).toEqual([owner]);
         });
 
         it("a reconnect reuses the active row without a password or version bump", async () => {
@@ -364,23 +419,35 @@ describe("WatchPartyService on real Postgres", () => {
 
         it("a full room is 400; the owner and existing members still get in", async () => {
             const service = makeService();
-            const created = await createActiveRoom(service, { maxParticipants: 2 });
+            const created = await createActiveRoom(service, {
+                maxParticipants: 2,
+            });
             await join(service, alice, created.roomCode);
 
-            expect(await status(join(service, bob, created.roomCode))).toMatchObject({
+            expect(
+                await status(join(service, bob, created.roomCode)),
+            ).toMatchObject({
                 status: 400,
                 message: "Room capacity overflow limit reached. Cap: 2",
             });
-            expect(await status(join(service, alice, created.roomCode))).toEqual({ ok: true });
-            expect(await status(join(service, owner, created.roomCode, ""))).toEqual({ ok: true });
+            expect(
+                await status(join(service, alice, created.roomCode)),
+            ).toEqual({ ok: true });
+            expect(
+                await status(join(service, owner, created.roomCode, "")),
+            ).toEqual({ ok: true });
         });
 
         it("concurrent joins for the last slot: the room row lock admits exactly one", async () => {
             const service = makeService();
-            const created = await createActiveRoom(service, { maxParticipants: 2 });
+            const created = await createActiveRoom(service, {
+                maxParticipants: 2,
+            });
 
             const results = await Promise.all(
-                [alice, bob, carol].map((u) => status(join(service, u, created.roomCode))),
+                [alice, bob, carol].map((u) =>
+                    status(join(service, u, created.roomCode)),
+                ),
             );
 
             expect(results.filter((r) => r.ok)).toHaveLength(1);
@@ -388,7 +455,9 @@ describe("WatchPartyService on real Postgres", () => {
                 expect.objectContaining({ status: 400 }),
                 expect.objectContaining({ status: 400 }),
             ]);
-            expect((await memberships(created.roomId)).filter((m) => m.is_active)).toHaveLength(2);
+            expect(
+                (await memberships(created.roomId)).filter((m) => m.is_active),
+            ).toHaveLength(2);
         });
 
         it("a member of room A joining room B gets ACTIVE_MEMBERSHIP_ELSEWHERE naming A", async () => {
@@ -437,10 +506,18 @@ describe("WatchPartyService on real Postgres", () => {
                 participantCount: 1,
             });
             const rows = await memberships(created.roomId);
-            expect(rows.find((m) => m.user_id === alice)).toMatchObject({ is_active: false });
-            expect(rows.find((m) => m.user_id === alice)?.left_at).toBeInstanceOf(Date);
-            expect(rows.find((m) => m.user_id === owner)).toMatchObject({ is_active: true });
-            expect((await room(created.roomId)).lifecycle_status).toBe("ACTIVE");
+            expect(rows.find((m) => m.user_id === alice)).toMatchObject({
+                is_active: false,
+            });
+            expect(
+                rows.find((m) => m.user_id === alice)?.left_at,
+            ).toBeInstanceOf(Date);
+            expect(rows.find((m) => m.user_id === owner)).toMatchObject({
+                is_active: true,
+            });
+            expect((await room(created.roomId)).lifecycle_status).toBe(
+                "ACTIVE",
+            );
         });
 
         it("owner leave moves the room to TERMINATING and ends every membership", async () => {
@@ -448,15 +525,25 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             await join(service, alice, created.roomCode);
 
-            const result = await service.leaveRoomSession(owner, created.roomId);
+            const result = await service.leaveRoomSession(
+                owner,
+                created.roomId,
+            );
 
-            expect(result).toMatchObject({ status: "ROOM_DESTROYED", participantCount: 0 });
-            expect([...(result.membersToKick ?? [])].sort()).toEqual([alice, owner].sort());
+            expect(result).toMatchObject({
+                status: "ROOM_DESTROYED",
+                participantCount: 0,
+            });
+            expect([...(result.membersToKick ?? [])].sort()).toEqual(
+                [alice, owner].sort(),
+            );
             expect(await room(created.roomId)).toMatchObject({
                 lifecycle_status: "TERMINATING",
                 is_active: false,
             });
-            expect((await memberships(created.roomId)).every((m) => !m.is_active)).toBe(true);
+            expect(
+                (await memberships(created.roomId)).every((m) => !m.is_active),
+            ).toBe(true);
         });
 
         it("a retried owner leave reports ROOM_ALREADY_TERMINATING; others get NO_ACTIVE_SESSION", async () => {
@@ -464,11 +551,15 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             await service.leaveRoomSession(owner, created.roomId);
 
-            expect(await service.leaveRoomSession(owner, created.roomId)).toMatchObject({
+            expect(
+                await service.leaveRoomSession(owner, created.roomId),
+            ).toMatchObject({
                 status: "ROOM_ALREADY_TERMINATING",
                 roomId: created.roomId,
             });
-            expect(await service.leaveRoomSession(alice, created.roomId)).toEqual({
+            expect(
+                await service.leaveRoomSession(alice, created.roomId),
+            ).toEqual({
                 status: "NO_ACTIVE_SESSION",
             });
         });
@@ -478,12 +569,16 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             const joined = await join(service, alice, created.roomCode);
 
-            expect(await service.disassociateParticipant(joined.participantId)).toEqual({
+            expect(
+                await service.disassociateParticipant(joined.participantId),
+            ).toEqual({
                 roomId: created.roomId,
                 roomCode: created.roomCode,
                 participantCount: 1,
             });
-            expect(await service.disassociateParticipant(joined.participantId)).toBeNull();
+            expect(
+                await service.disassociateParticipant(joined.participantId),
+            ).toBeNull();
         });
 
         it("grace expiry does nothing once the room is no longer ACTIVE", async () => {
@@ -492,9 +587,13 @@ describe("WatchPartyService on real Postgres", () => {
             const joined = await join(service, alice, created.roomCode);
             await setLifecycle(created.roomId, "TERMINATING");
 
-            expect(await service.disassociateParticipant(joined.participantId)).toBeNull();
             expect(
-                (await memberships(created.roomId)).find((m) => m.user_id === alice)?.is_active,
+                await service.disassociateParticipant(joined.participantId),
+            ).toBeNull();
+            expect(
+                (await memberships(created.roomId)).find(
+                    (m) => m.user_id === alice,
+                )?.is_active,
             ).toBe(true);
         });
     });
@@ -505,7 +604,11 @@ describe("WatchPartyService on real Postgres", () => {
             const created = await createActiveRoom(service);
             await join(service, alice, created.roomCode);
 
-            expect(await service.getRoomDetailsByCode(created.roomCode.toLowerCase())).toMatchObject({
+            expect(
+                await service.getRoomDetailsByCode(
+                    created.roomCode.toLowerCase(),
+                ),
+            ).toMatchObject({
                 roomId: created.roomId,
                 roomCode: created.roomCode,
             });
@@ -519,17 +622,25 @@ describe("WatchPartyService on real Postgres", () => {
                     { userId: alice, isOwner: false },
                 ].sort((a, b) => a.userId.localeCompare(b.userId)),
             );
-            expect(await service.getRoomProjectionState(created.roomId)).toMatchObject({
+            expect(
+                await service.getRoomProjectionState(created.roomId),
+            ).toMatchObject({
                 roomId: created.roomId,
                 lifecycleStatus: "ACTIVE",
                 participantCount: 2,
                 maxParticipants: 5,
             });
-            await expect(service.assertRoomActive(created.roomId)).resolves.toBeUndefined();
+            await expect(
+                service.assertRoomActive(created.roomId),
+            ).resolves.toBeUndefined();
 
             await setLifecycle(created.roomId, "TERMINATING");
-            expect(await service.getRoomDetailsByCode(created.roomCode)).toBeNull();
-            expect(await status(service.assertRoomActive(created.roomId))).toMatchObject({
+            expect(
+                await service.getRoomDetailsByCode(created.roomCode),
+            ).toBeNull();
+            expect(
+                await status(service.assertRoomActive(created.roomId)),
+            ).toMatchObject({
                 status: 409,
             });
         });

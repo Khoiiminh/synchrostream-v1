@@ -70,13 +70,15 @@ export class WatchPartyGateway
         @Inject(MEDIA_SESSION) liveKitService: MediaSessionPort,
         chatRelay: RoomChatRelay,
     ) {
-        const gateway = this;
+        // Read lazily: @WebSocketServer() assigns `server` after construction.
+        const currentServer = () => this.server;
         this.registry = new RoomRuntimeRegistry(
-            (socketId) => gateway.server?.sockets.get(socketId)?.connected === true,
+            (socketId) =>
+                currentServer()?.sockets.get(socketId)?.connected === true,
         );
         const ctx = {
             get server() {
-                return gateway.server;
+                return currentServer();
             },
             logger: this.logger,
             registry: this.registry,
@@ -115,7 +117,11 @@ export class WatchPartyGateway
         roomId: string,
         requestingSocketId?: string,
     ): Promise<string> {
-        return this.lifecycle.leaveRoomVoluntarily(userId, roomId, requestingSocketId);
+        return this.lifecycle.leaveRoomVoluntarily(
+            userId,
+            roomId,
+            requestingSocketId,
+        );
     }
 
     @SubscribeMessage("room:leave")

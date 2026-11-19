@@ -69,20 +69,25 @@ describe("WatchPartyModule wiring", () => {
         ["MEDIA_SESSION", MEDIA_SESSION, LiveKitService],
         ["ROOM_STATE_PROJECTION", ROOM_STATE_PROJECTION, RedisProvider],
     ] as const)("%s → the singleton %p", (_name, token, adapter) => {
-        const bound = moduleRef.get(token, { strict: false });
+        const bound = moduleRef.get<unknown>(token, { strict: false });
         expect(bound).toBeInstanceOf(adapter);
-        expect(bound).toBe(moduleRef.get(adapter as never, { strict: false }));
+        expect(bound).toBe(moduleRef.get<unknown>(adapter, { strict: false }));
     });
 
     it("the facade's use cases receive the bound ports", () => {
         // Since phase 3 WatchPartyService builds the use cases from its ports.
-        const service = moduleRef.get(WatchPartyService) as unknown as Record<
-            string,
-            Record<string, unknown>
-        >;
-        const store = moduleRef.get(WATCH_PARTY_STORE);
-        const outbox = moduleRef.get(LIFECYCLE_OUTBOX);
-        for (const useCase of ["createRoom", "joinRoom", "leaveRoom", "expireMembership"]) {
+        const service = moduleRef.get<
+            WatchPartyService,
+            Record<string, Record<string, unknown>>
+        >(WatchPartyService);
+        const store = moduleRef.get<unknown>(WATCH_PARTY_STORE);
+        const outbox = moduleRef.get<unknown>(LIFECYCLE_OUTBOX);
+        for (const useCase of [
+            "createRoom",
+            "joinRoom",
+            "leaveRoom",
+            "expireMembership",
+        ]) {
             expect(service[useCase].repo).toBe(store);
             expect(service[useCase].lifecycleOutbox).toBe(outbox);
         }
@@ -90,38 +95,44 @@ describe("WatchPartyModule wiring", () => {
         expect(service.joinRoom.attemptLimiter).toBe(
             moduleRef.get(ATTEMPT_LIMITER, { strict: false }),
         );
-        expect(service.createRoom.passwords).toBe(moduleRef.get(PASSWORD_HASHER));
+        expect(service.createRoom.passwords).toBe(
+            moduleRef.get(PASSWORD_HASHER),
+        );
         expect(service.joinRoom.passwords).toBe(moduleRef.get(PASSWORD_HASHER));
     });
 
     it("the outbox and chat relay receive their ports", () => {
         // Since phase 3 the outbox worker builds its use cases from the ports.
-        const outbox = moduleRef.get(RoomLifecycleOutboxService) as unknown as Record<
-            string,
-            Record<string, unknown>
-        >;
-        const projection = moduleRef.get(ROOM_STATE_PROJECTION, { strict: false });
-        const media = moduleRef.get(MEDIA_SESSION, { strict: false });
+        const outbox = moduleRef.get<
+            RoomLifecycleOutboxService,
+            Record<string, Record<string, unknown>>
+        >(RoomLifecycleOutboxService);
+        const projection = moduleRef.get<unknown>(ROOM_STATE_PROJECTION, {
+            strict: false,
+        });
+        const media = moduleRef.get<unknown>(MEDIA_SESSION, { strict: false });
         expect(outbox.reconcileRoom.redis).toBe(projection);
         expect(outbox.reconcileRoom.liveKit).toBe(media);
         expect(outbox.processEvent.liveKit).toBe(media);
         expect(outbox.processEvent.reconcileRoom).toBe(outbox.reconcileRoom);
 
-        const relay = moduleRef.get(RoomChatRelay) as unknown as Record<string, unknown>;
+        const relay = moduleRef.get<RoomChatRelay, Record<string, unknown>>(
+            RoomChatRelay,
+        );
         expect(relay.repository).toBe(moduleRef.get(CHAT_STORE));
     });
 
     it("LiveKit and media sessions reach watch-party tables only through its contract", () => {
         const rooms = moduleRef.get(RoomAccessQuery, { strict: false });
         const events = moduleRef.get(MediaSessionEvents, { strict: false });
-        const liveKitRepo = moduleRef.get(LiveKitRepository, { strict: false }) as unknown as Record<
-            string,
-            unknown
-        >;
-        const mediaRepo = moduleRef.get(MediaSessionRepository, { strict: false }) as unknown as Record<
-            string,
-            unknown
-        >;
+        const liveKitRepo = moduleRef.get<
+            LiveKitRepository,
+            Record<string, unknown>
+        >(LiveKitRepository, { strict: false });
+        const mediaRepo = moduleRef.get<
+            MediaSessionRepository,
+            Record<string, unknown>
+        >(MediaSessionRepository, { strict: false });
         expect(rooms).toBeInstanceOf(RoomAccessQuery);
         expect(liveKitRepo.rooms).toBe(rooms);
         expect(liveKitRepo.events).toBe(events);
@@ -129,16 +140,20 @@ describe("WatchPartyModule wiring", () => {
     });
 
     it("the gateway's realtime collaborators share one context with the bound ports", () => {
-        const gateway = moduleRef.get(WatchPartyGateway) as unknown as Record<
-            string,
-            { ctx: Record<string, unknown> }
-        >;
+        const gateway = moduleRef.get<
+            WatchPartyGateway,
+            Record<string, { ctx: Record<string, unknown> }>
+        >(WatchPartyGateway);
         expect(gateway).toBeInstanceOf(WatchPartyGateway);
 
         const ctx = gateway.lifecycle.ctx;
-        expect(ctx.redis).toBe(moduleRef.get(REALTIME_STATE, { strict: false }));
+        expect(ctx.redis).toBe(
+            moduleRef.get(REALTIME_STATE, { strict: false }),
+        );
         expect(ctx.redis).toBeInstanceOf(RedisProvider);
-        expect(ctx.liveKitService).toBe(moduleRef.get(MEDIA_SESSION, { strict: false }));
+        expect(ctx.liveKitService).toBe(
+            moduleRef.get(MEDIA_SESSION, { strict: false }),
+        );
         expect(ctx.watchPartyService).toBe(moduleRef.get(WatchPartyService));
         expect(ctx.chatRelay).toBe(moduleRef.get(RoomChatRelay));
         for (const part of ["handshake", "playback", "chat"]) {

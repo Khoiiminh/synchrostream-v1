@@ -1,6 +1,10 @@
 import { HttpException } from "@nestjs/common";
 import * as E from "../domain/errors.js";
-import { rethrowAsHttp, toHttpException, withHttpErrors } from "./error-mapper.js";
+import {
+    rethrowAsHttp,
+    toHttpException,
+    withHttpErrors,
+} from "./error-mapper.js";
 
 /*
  * Every domain error's HTTP shape. The service contract spec pins these end
@@ -22,52 +26,92 @@ describe("toHttpException", () => {
         [
             "RoomPasswordPolicyViolation",
             new E.RoomPasswordPolicyViolation(4, 64),
-            plain(400, "Bad Request", "A room password of 4-64 characters is required."),
+            plain(
+                400,
+                "Bad Request",
+                "A room password of 4-64 characters is required.",
+            ),
         ],
         [
             "InvalidJoinIdentity",
             new E.InvalidJoinIdentity(),
-            plain(400, "Bad Request", "An authenticated user UUID is required to join a room."),
+            plain(
+                400,
+                "Bad Request",
+                "An authenticated user UUID is required to join a room.",
+            ),
         ],
         [
             "RoomPasswordRequired",
             new E.RoomPasswordRequired(),
-            plain(400, "Bad Request", "This room is password protected. Enter the room password to join."),
+            plain(
+                400,
+                "Bad Request",
+                "This room is password protected. Enter the room password to join.",
+            ),
         ],
         [
             "WrongRoomPassword",
             new E.WrongRoomPassword(),
-            plain(400, "Bad Request", "Security credentials verification failure: Authentication rejected."),
+            plain(
+                400,
+                "Bad Request",
+                "Security credentials verification failure: Authentication rejected.",
+            ),
         ],
         [
             "RoomFull",
             new E.RoomFull(7),
-            plain(400, "Bad Request", "Room capacity overflow limit reached. Cap: 7"),
+            plain(
+                400,
+                "Bad Request",
+                "Room capacity overflow limit reached. Cap: 7",
+            ),
         ],
         [
             "PlaybackNotPermitted",
             new E.PlaybackNotPermitted(),
-            plain(400, "Bad Request", "Playback control rejected: only the room owner can control playback."),
+            plain(
+                400,
+                "Bad Request",
+                "Playback control rejected: only the room owner can control playback.",
+            ),
         ],
         [
             "RoomNotFound",
             new E.RoomNotFound(),
-            plain(404, "Not Found", "Handshake rejected: No matching active room stream code sequence."),
+            plain(
+                404,
+                "Not Found",
+                "Handshake rejected: No matching active room stream code sequence.",
+            ),
         ],
         [
             "RoomStillProvisioning",
             new E.RoomStillProvisioning(),
-            plain(503, "Service Unavailable", "The watch room is still being prepared. Retrying shortly."),
+            plain(
+                503,
+                "Service Unavailable",
+                "The watch room is still being prepared. Retrying shortly.",
+            ),
         ],
         [
             "RoomNotAcceptingParticipants",
             new E.RoomNotAcceptingParticipants(),
-            plain(409, "Conflict", "The watch room is no longer accepting participants."),
+            plain(
+                409,
+                "Conflict",
+                "The watch room is no longer accepting participants.",
+            ),
         ],
         [
             "AlreadyInActiveRoom (create)",
             new E.AlreadyInActiveRoom("create"),
-            plain(409, "Conflict", "You already belong to an active watch room."),
+            plain(
+                409,
+                "Conflict",
+                "You already belong to an active watch room.",
+            ),
         ],
         [
             "AlreadyInActiveRoom (join)",
@@ -86,7 +130,12 @@ describe("toHttpException", () => {
                 body: {
                     message:
                         "You already have an active room (OLD111). Close it before creating another room.",
-                    error: { code: "ACTIVE_OWNER_ROOM", roomId: "r1", roomCode: "OLD111", isOwner: true },
+                    error: {
+                        code: "ACTIVE_OWNER_ROOM",
+                        roomId: "r1",
+                        roomCode: "OLD111",
+                        isOwner: true,
+                    },
                 },
             },
         ],
@@ -96,7 +145,8 @@ describe("toHttpException", () => {
             {
                 status: 409,
                 body: {
-                    message: "You are still in room OTH222. Leave it before joining another room.",
+                    message:
+                        "You are still in room OTH222. Leave it before joining another room.",
                     error: {
                         code: "ACTIVE_MEMBERSHIP_ELSEWHERE",
                         roomId: "r2",
@@ -129,7 +179,8 @@ describe("toHttpException", () => {
             {
                 status: 409,
                 body: {
-                    message: "Room code TAKEN1 is already in use. Choose another code.",
+                    message:
+                        "Room code TAKEN1 is already in use. Choose another code.",
                     error: { code: "ROOM_CODE_IN_USE" },
                 },
             },
@@ -140,7 +191,8 @@ describe("toHttpException", () => {
             {
                 status: 409,
                 body: {
-                    message: "Could not allocate a unique room code. Please try again.",
+                    message:
+                        "Could not allocate a unique room code. Please try again.",
                     error: { code: "ROOM_CODE_IN_USE" },
                 },
             },
@@ -159,23 +211,21 @@ describe("toHttpException", () => {
 describe("withHttpErrors / rethrowAsHttp", () => {
     it("converts a domain error", async () => {
         await expect(
-            withHttpErrors(async () => {
-                throw new E.RoomNotFound();
-            }),
+            withHttpErrors(() => Promise.reject(new E.RoomNotFound())),
         ).rejects.toBeInstanceOf(HttpException);
     });
 
     it("passes other errors through unchanged", async () => {
         const boom = new Error("db down");
-        await expect(
-            withHttpErrors(async () => {
-                throw boom;
-            }),
-        ).rejects.toBe(boom);
+        await expect(withHttpErrors(() => Promise.reject(boom))).rejects.toBe(
+            boom,
+        );
         expect(() => rethrowAsHttp(boom)).toThrow(boom);
     });
 
     it("returns the value on success", async () => {
-        await expect(withHttpErrors(async () => 42)).resolves.toBe(42);
+        await expect(withHttpErrors(() => Promise.resolve(42))).resolves.toBe(
+            42,
+        );
     });
 });

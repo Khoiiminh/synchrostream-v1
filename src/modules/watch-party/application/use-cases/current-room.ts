@@ -30,7 +30,9 @@ export async function findCurrentRoom(
  * "You are still in another room". Mapped to the structured 409 the client
  * answers with "leave it and continue" (`leaveCurrent: true`).
  */
-export function toMemberOfAnotherRoom(current: CurrentRoom): MemberOfAnotherRoom {
+export function toMemberOfAnotherRoom(
+    current: CurrentRoom,
+): MemberOfAnotherRoom {
     return new MemberOfAnotherRoom(
         current.roomId,
         current.roomCode,

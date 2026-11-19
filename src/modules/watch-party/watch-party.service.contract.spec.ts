@@ -7,7 +7,6 @@ import {
     RoomCodeConflict,
 } from "./application/ports/store-errors.js";
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
-import type { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
 import {
     JOIN_PASSWORD_RULE,
     type AttemptLimiter,
@@ -42,18 +41,28 @@ beforeAll(async () => {
 
 function makeRepo() {
     const repo = {
-        withTransaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
-            cb(TX),
+        withTransaction: jest.fn((cb: (tx: unknown) => unknown) =>
+            Promise.resolve(cb(TX)),
         ),
         acquireOwnerRoomCreationLock: jest.fn(),
         findOwnedLiveRoom: jest.fn().mockResolvedValue(undefined),
         deactivateMembershipsInTerminatedRooms: jest.fn(),
         findCurrentRoom: jest.fn().mockResolvedValue(undefined),
-        insertProvisioningRoom: jest.fn(async (_tx, p) => ({
-            id: "room-new",
-            room_code: p.roomCode,
-            max_participants: p.maxParticipants,
-        })),
+        insertProvisioningRoom: jest.fn(
+            (
+                _tx: unknown,
+                p: {
+                    roomCode: string;
+                    maxParticipants: number;
+                    passwordHash: string;
+                },
+            ) =>
+                Promise.resolve({
+                    id: "room-new",
+                    room_code: p.roomCode,
+                    max_participants: p.maxParticipants,
+                }),
+        ),
         insertOwnerParticipant: jest.fn(),
         lockLiveRoomByCode: jest.fn(),
         findActiveParticipant: jest.fn().mockResolvedValue(undefined),
@@ -93,8 +102,8 @@ function setup() {
     };
     const service = new WatchPartyService(
         repo as unknown as WatchPartyStore,
-        outbox as unknown as RoomLifecycleOutboxService,
-        limiter as unknown as AttemptLimiter,
+        outbox,
+        limiter,
         new BcryptPasswordHasher(),
     );
     return { service, repo, outbox, limiter };
@@ -124,7 +133,8 @@ function pgUniqueViolation(constraint: string) {
         code: "23505",
         constraint,
     });
-    if (constraint === "idx_active_room_code") return new RoomCodeConflict({ cause });
+    if (constraint === "idx_active_room_code")
+        return new RoomCodeConflict({ cause });
     if (constraint === "idx_one_active_room_per_user") {
         return new ActiveMembershipConflict({ cause });
     }
@@ -164,7 +174,7 @@ describe("WatchPartyService contract", () => {
             expect(
                 await contractOf(
                     service.createRoomSession({
-                        dto: createDto({ passwordPlain }) as never,
+                        dto: createDto({ passwordPlain }),
                         ownerId: OWNER,
                     }),
                 ),
@@ -173,8 +183,7 @@ describe("WatchPartyService contract", () => {
                 body: {
                     statusCode: 400,
                     error: "Bad Request",
-                    message:
-                        "A room password of 4-64 characters is required.",
+                    message: "A room password of 4-64 characters is required.",
                 },
             });
             expect(repo.withTransaction).not.toHaveBeenCalled();
@@ -287,7 +296,9 @@ describe("WatchPartyService contract", () => {
 
         it("reports PROVISIONING, not an error, when inline provisioning fails", async () => {
             const { service, outbox } = setup();
-            outbox.provisionRoomNow.mockRejectedValue(new Error("livekit down"));
+            outbox.provisionRoomNow.mockRejectedValue(
+                new Error("livekit down"),
+            );
 
             const result = await service.createRoomSession({
                 dto: createDto({ maxParticipants: 8 }),
@@ -506,7 +517,11 @@ describe("WatchPartyService contract", () => {
             expect(repo.lockLiveRoomByCode).toHaveBeenCalledWith(TX, "ABC123");
         });
 
-        it.each([["empty", ""], ["blank", "   "], ["missing", undefined]])(
+        it.each([
+            ["empty", ""],
+            ["blank", "   "],
+            ["missing", undefined],
+        ])(
             "400 for a %s password without counting an attempt",
             async (_label, passwordPlain) => {
                 const { service, repo, limiter } = setup();
@@ -824,7 +839,14 @@ describe("WatchPartyService contract", () => {
 
         it.each([
             ["the room is gone", undefined],
-            ["the room is not ACTIVE", { id: "room-1", room_code: "ABC123", lifecycle_status: "TERMINATING" }],
+            [
+                "the room is not ACTIVE",
+                {
+                    id: "room-1",
+                    room_code: "ABC123",
+                    lifecycle_status: "TERMINATING",
+                },
+            ],
         ])("returns null when %s", async (_label, room) => {
             const { service, repo } = setup();
             repo.findParticipantRoomId.mockResolvedValue("room-1");
@@ -885,17 +907,17 @@ describe("WatchPartyService contract", () => {
             const { service, repo } = setup();
             repo.isRoomActive.mockResolvedValue(false);
 
-            expect(await contractOf(service.assertRoomActive("room-1"))).toEqual(
-                {
-                    status: HttpStatus.CONFLICT,
-                    body: {
-                        statusCode: 409,
-                        error: "Conflict",
-                        message:
-                            "The watch room is no longer accepting participants.",
-                    },
+            expect(
+                await contractOf(service.assertRoomActive("room-1")),
+            ).toEqual({
+                status: HttpStatus.CONFLICT,
+                body: {
+                    statusCode: 409,
+                    error: "Conflict",
+                    message:
+                        "The watch room is no longer accepting participants.",
                 },
-            );
+            });
         });
 
         it("getRoomDetailsByCode normalizes the code and returns null when missing", async () => {

@@ -75,14 +75,19 @@ export class MembershipLifecycle {
                 await this.ctx.watchPartyService.listActiveMemberships();
             const candidates = memberships.filter(
                 (membership) =>
-                    !this.ctx.registry.handshakesInFlight.has(membership.userId) &&
+                    !this.ctx.registry.handshakesInFlight.has(
+                        membership.userId,
+                    ) &&
                     !this.ctx.registry.pendingCleanups.has(
                         this.ctx.registry.getCleanupKey(
                             membership.userId,
                             membership.roomId,
                         ),
                     ) &&
-                    !this.ctx.registry.hasLiveBinding(membership.userId, membership.roomId),
+                    !this.ctx.registry.hasLiveBinding(
+                        membership.userId,
+                        membership.roomId,
+                    ),
             );
             if (candidates.length === 0) return;
 
@@ -111,10 +116,7 @@ export class MembershipLifecycle {
     }
 
     /** True when the user should be treated as present and not cleaned up. */
-    async isUserPresent(
-        userId: string,
-        roomId: string,
-    ): Promise<boolean> {
+    async isUserPresent(userId: string, roomId: string): Promise<boolean> {
         if (this.ctx.registry.handshakesInFlight.has(userId)) return true;
         if (this.ctx.registry.hasLiveBinding(userId, roomId)) return true;
         try {
@@ -130,7 +132,9 @@ export class MembershipLifecycle {
     }
 
     async handleDisconnect(socket: AuthenticatedSocket): Promise<void> {
-        const metadata = this.ctx.registry.socketToParticipantMap.get(socket.id);
+        const metadata = this.ctx.registry.socketToParticipantMap.get(
+            socket.id,
+        );
 
         if (!metadata) {
             this.ctx.logger.debug({
@@ -159,7 +163,9 @@ export class MembershipLifecycle {
 
         // Without this, the presence key refreshed moments ago would make the grace
         // timer believe the user is still connected.
-        if (!this.ctx.registry.hasLiveBinding(metadata.userId, metadata.roomId)) {
+        if (
+            !this.ctx.registry.hasLiveBinding(metadata.userId, metadata.roomId)
+        ) {
             try {
                 await this.ctx.redis.clearPresence(
                     metadata.roomId,
@@ -189,8 +195,12 @@ export class MembershipLifecycle {
          * Keep cleanup scoped to this user's membership in this specific room.
          * A new room must not cancel retries for an older room being terminated.
          */
-        const cleanupKey = this.ctx.registry.getCleanupKey(metadata.userId, metadata.roomId);
-        const existingCleanup = this.ctx.registry.pendingCleanups.get(cleanupKey);
+        const cleanupKey = this.ctx.registry.getCleanupKey(
+            metadata.userId,
+            metadata.roomId,
+        );
+        const existingCleanup =
+            this.ctx.registry.pendingCleanups.get(cleanupKey);
 
         if (existingCleanup) {
             clearTimeout(existingCleanup);
@@ -236,7 +246,9 @@ export class MembershipLifecycle {
                             return;
                         }
 
-                        const actor = this.ctx.registry.runningActors.get(metadata.roomId);
+                        const actor = this.ctx.registry.runningActors.get(
+                            metadata.roomId,
+                        );
                         const isOwner =
                             metadata.isOwner ||
                             actor?.ownerId === metadata.userId;
@@ -259,7 +271,9 @@ export class MembershipLifecycle {
                             err: error,
                         });
 
-                        const actor = this.ctx.registry.runningActors.get(metadata.roomId);
+                        const actor = this.ctx.registry.runningActors.get(
+                            metadata.roomId,
+                        );
                         if (
                             metadata.isOwner ||
                             actor?.ownerId === metadata.userId
@@ -281,7 +295,10 @@ export class MembershipLifecycle {
         userId: string;
         isOwner: boolean;
     }): void {
-        const cleanupKey = this.ctx.registry.getCleanupKey(metadata.userId, metadata.roomId);
+        const cleanupKey = this.ctx.registry.getCleanupKey(
+            metadata.userId,
+            metadata.roomId,
+        );
 
         // Keep retrying failed owner cleanup instead of leaving an active room
         // permanently stuck after a transient LiveKit or database failure
@@ -289,7 +306,8 @@ export class MembershipLifecycle {
             () =>
                 void (async () => {
                     if (
-                        this.ctx.registry.pendingCleanups.get(cleanupKey) !== retryTimeoutId
+                        this.ctx.registry.pendingCleanups.get(cleanupKey) !==
+                        retryTimeoutId
                     ) {
                         return;
                     }
@@ -357,7 +375,9 @@ export class MembershipLifecycle {
                 "The room host has left the session. This watch room has been closed.",
         });
 
-        const sockets = await this.ctx.server.in(metadata.roomId).fetchSockets();
+        const sockets = await this.ctx.server
+            .in(metadata.roomId)
+            .fetchSockets();
         for (const clientSocket of sockets) {
             clientSocket.disconnect(true);
         }
@@ -566,7 +586,9 @@ export class MembershipLifecycle {
         socket: AuthenticatedSocket,
     ): Promise<{ ok: boolean; status?: string; message?: string }> {
         const user = socket.data.user;
-        const metadata = this.ctx.registry.socketToParticipantMap.get(socket.id);
+        const metadata = this.ctx.registry.socketToParticipantMap.get(
+            socket.id,
+        );
 
         if (!user) {
             return {

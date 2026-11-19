@@ -95,15 +95,17 @@ export class RoomAccessQuery {
             LIMIT 1
         `;
 
-        const result = await this.pg.query<ActiveRoomMember>(
-            participantQuery,
-            [roomId, userId],
-        );
+        const result = await this.pg.query<ActiveRoomMember>(participantQuery, [
+            roomId,
+            userId,
+        ]);
         return result.rows[0];
     }
 
     /** The ACTIVE room with its capacity, if it exists. */
-    async findActiveRoom(roomId: string): Promise<ActiveRoomCapacity | undefined> {
+    async findActiveRoom(
+        roomId: string,
+    ): Promise<ActiveRoomCapacity | undefined> {
         const roomQuery = `
             SELECT
                 id,
@@ -114,7 +116,9 @@ export class RoomAccessQuery {
             LIMIT 1
         `;
 
-        const result = await this.pg.query<ActiveRoomCapacity>(roomQuery, [roomId]);
+        const result = await this.pg.query<ActiveRoomCapacity>(roomQuery, [
+            roomId,
+        ]);
         return result.rows[0];
     }
 
@@ -160,10 +164,10 @@ export class RoomAccessQuery {
             LIMIT 1
         `;
 
-        const result = await this.pg.query<RoomMembership>(
-            participantQuery,
-            [roomId, userId],
-        );
+        const result = await this.pg.query<RoomMembership>(participantQuery, [
+            roomId,
+            userId,
+        ]);
         return result.rows[0];
     }
 }

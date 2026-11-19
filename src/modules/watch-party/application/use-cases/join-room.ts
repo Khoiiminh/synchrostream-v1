@@ -222,7 +222,8 @@ export class JoinRoom {
                          * current room and switch" never leaves its room for a
                          * join that would have failed anyway.
                          */
-                        const currentRoom = await findCurrentRoom(this.repo, 
+                        const currentRoom = await findCurrentRoom(
+                            this.repo,
                             transactionClient,
                             p.userId,
                             room.id,
@@ -295,7 +296,8 @@ export class JoinRoom {
                     constraint: "idx_one_active_room_per_user",
                 });
 
-                const currentRoom = await findCurrentRoom(this.repo, 
+                const currentRoom = await findCurrentRoom(
+                    this.repo,
                     undefined,
                     p.userId,
                 );

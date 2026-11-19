@@ -22,9 +22,7 @@ export class MediaSessionRepository {
 
     // ---- rooms / participants ----
 
-    findRoomActivity(
-        roomId: string,
-    ): Promise<RoomActivityRow | undefined> {
+    findRoomActivity(roomId: string): Promise<RoomActivityRow | undefined> {
         return this.rooms.findRoomActivity(roomId);
     }
 

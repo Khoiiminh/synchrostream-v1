@@ -33,7 +33,9 @@ export class MediaStartup {
                     return;
                 } catch (error) {
                     try {
-                        await this.ctx.watchPartyService.assertRoomActive(roomId);
+                        await this.ctx.watchPartyService.assertRoomActive(
+                            roomId,
+                        );
                     } catch {
                         // Termination owns provider cleanup; stop trying to start media.
                         return;
