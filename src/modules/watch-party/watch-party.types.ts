@@ -129,3 +129,44 @@ export interface OutboxEvent {
     attempts: number;
     created_at: Date;
 }
+
+/** `chat_history` row as read back for a room's history. `id` is a BIGINT (string). */
+export interface ChatHistoryRow {
+    id: string;
+    user_id: string | null;
+    sender_name_at_time: string | null;
+    message: string;
+    sent_at: Date;
+}
+
+/** `RETURNING id, sent_at` of a chat insert. */
+export interface InsertedChatRow {
+    id: string;
+    sent_at: Date;
+}
+
+/**
+ * One chat message as the gateway sends it (`room:chat:broadcast` and each
+ * entry of `room:chat:history`). `id` is null when the message could not be
+ * persisted and was only relayed live.
+ */
+export interface ChatMessagePayload {
+    id: string | null;
+    userId: string | null;
+    username: string;
+    message: string;
+    /** Server time in epoch ms. */
+    timestamp: number;
+    /** Echo of the sender's optimistic id; null in history and for other senders' clients. */
+    clientMessageId: string | null;
+}
+
+/** Ack returned to the sender of `room:chat:message`. */
+export type ChatSendAck =
+    | { ok: true; id: string | null; timestamp: number }
+    | {
+          ok: false;
+          code: "NOT_IN_ROOM" | "INVALID_MESSAGE" | "RATE_LIMITED";
+          message: string;
+          retryAfterMs?: number;
+      };

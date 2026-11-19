@@ -10,6 +10,8 @@ import { AuthModule } from "../auth/auth.module.js";
 import { RoomLifecycleOutboxService } from "./room-lifecycle-outbox.service.js";
 import { RoomLifecycleOutboxRepository } from "./room-lifecycle-outbox.repository.js";
 import { WatchPartyRepository } from "./watch-party.repository.js";
+import { RoomChatRelay } from "./room-chat.relay.js";
+import { RoomChatRepository } from "./room-chat.repository.js";
 
 @Module({
     imports: [
@@ -30,6 +32,8 @@ import { WatchPartyRepository } from "./watch-party.repository.js";
         RoomLifecycleOutboxService,
         WatchPartyRepository,
         RoomLifecycleOutboxRepository,
+        RoomChatRelay,
+        RoomChatRepository,
     ],
 
     exports: [WatchPartyService],

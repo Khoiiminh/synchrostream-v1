@@ -21,6 +21,8 @@ import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { WsJwtGuard } from "../auth/guards/ws-jwt.guard.js";
 import { LiveKitService } from "../livekit/livekit.service.js";
 import type { AuthenticatedSocket } from "../auth/auth.types.js";
+import { RoomChatRelay } from "./room-chat.relay.js";
+import type { ChatSendAck } from "./watch-party.types.js";
 
 type BindingMetadata = {
     participantId: string;
@@ -320,6 +322,7 @@ export class WatchPartyGateway
         private readonly watchPartyService: WatchPartyService,
         private readonly redis: RedisProvider,
         private readonly liveKitService: LiveKitService,
+        private readonly chatRelay: RoomChatRelay,
     ) {}
 
     async handleDisconnect(socket: AuthenticatedSocket): Promise<void> {
@@ -1223,6 +1226,8 @@ export class WatchPartyGateway
             // This also replaces a cached session id that is no longer ACTIVE.
             this.ensureMediaSession(session.roomId);
 
+            void this.sendChatHistory(socket, session.roomId);
+
             try {
                 await this.redis.refreshPresence(
                     [{ roomId: session.roomId, userId: user.id }],
@@ -1495,34 +1500,99 @@ export class WatchPartyGateway
         }
     }
 
+    /**
+     * Chat send. The socket's room binding is authoritative: `roomCode` in the
+     * body is ignored, so a member can only post to the room it is bound to.
+     * The sender gets an ack; everyone in the room (sender's other sockets
+     * included) gets `room:chat:broadcast`.
+     */
     @SubscribeMessage("room:chat:message")
     @UseGuards(WsJwtGuard)
-    handleChatMessage(
+    async handleChatMessage(
         @ConnectedSocket() socket: AuthenticatedSocket,
-        @MessageBody() data: { roomCode: string; message: string },
-    ): void {
+        @MessageBody()
+        data:
+            | {
+                  roomCode?: string;
+                  message?: unknown;
+                  clientMessageId?: unknown;
+              }
+            | undefined,
+    ): Promise<ChatSendAck> {
         const user = socket.data.user;
+        const binding = this.socketToParticipantMap.get(socket.id);
 
-        const targetMeta = this.socketToParticipantMap.get(socket.id);
-
-        if (!user || !targetMeta) {
-            throw new BadRequestException(
-                "Message block transmission rejected: Context identity unverified.",
-            );
+        if (!user || !binding || binding.userId !== user.id) {
+            return {
+                ok: false,
+                code: "NOT_IN_ROOM",
+                message: "Join the room before sending messages.",
+            };
         }
 
-        this.logger.debug({
-            message: "Inbound chat frame intercept received",
-            roomCode: targetMeta.roomCode,
-            userId: user.id,
-        });
-
-        this.server.to(targetMeta.roomId).emit("room:chat:broadcast", {
+        const result = await this.chatRelay.submit({
+            roomId: binding.roomId,
             userId: user.id,
             username: user.username,
-            message: data.message.trim(),
-            timestamp: Date.now(),
+            rawMessage: data?.message,
+            rawClientMessageId: data?.clientMessageId,
         });
+
+        if (!result.accepted) {
+            this.logger.debug({
+                message: "Chat message rejected",
+                roomId: binding.roomId,
+                userId: user.id,
+                code: result.ack.code,
+            });
+            return result.ack;
+        }
+
+        // The binding may have been dropped (leave, termination) while the
+        // insert ran; do not broadcast into a room this socket no longer holds.
+        if (
+            this.socketToParticipantMap.get(socket.id)?.roomId !==
+            binding.roomId
+        ) {
+            return {
+                ok: false,
+                code: "NOT_IN_ROOM",
+                message: "You are no longer in this room.",
+            };
+        }
+
+        this.server
+            .to(binding.roomId)
+            .emit("room:chat:broadcast", result.payload);
+
+        return {
+            ok: true,
+            id: result.payload.id,
+            timestamp: result.payload.timestamp,
+        };
+    }
+
+    /**
+     * Sends the room's recent chat to one freshly bound socket. Never fails the
+     * handshake: without history the member still gets live messages.
+     */
+    private async sendChatHistory(
+        socket: AuthenticatedSocket,
+        roomId: string,
+    ): Promise<void> {
+        try {
+            const messages = await this.chatRelay.getRecentHistory(roomId);
+            if (this.socketToParticipantMap.get(socket.id)?.roomId !== roomId)
+                return;
+            socket.emit("room:chat:history", { roomId, messages });
+        } catch (error) {
+            this.logger.warn({
+                message: "Failed to load chat history for a bound socket",
+                roomId,
+                socketId: socket.id,
+                err: error,
+            });
+        }
     }
 
     /**
