@@ -12,6 +12,6 @@
   },
   "sourceMaps": true,
   "exclude": [
-    ".*\\.spec\\.ts$"
+    ".*[.-]spec\\.ts$"
   ]
 }
