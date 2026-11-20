@@ -15,19 +15,28 @@ import {
     writeFile,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { SyncMetricsBatchDto, UpdateSyncRunDto } from "./sync-metrics.dto.js";
 import {
-    SAFE_ID_PATTERN,
-    SyncMetricsBatchDto,
-    UpdateSyncRunDto,
-} from "./sync-metrics.dto.js";
-import type { SyncRunMeta, SyncRunSummary } from "./sync-metrics.types.js";
-
-const META_FILE = "_run.json";
+    META_FILE,
+    annotateRun,
+    emptyRunMeta,
+    isSafeId,
+    newestFirst,
+    parseRunLines,
+    recordBatch,
+    restoreRunMeta,
+    sessionFileName,
+    storedLines,
+    summarizeRun,
+    type SyncRunMeta,
+    type SyncRunSummary,
+} from "./domain/run-records.js";
 
 /**
  * Persists synchronization measurements as NDJSON, one file per client
  * session under `<SYNC_METRICS_DIR>/<runId>/`. Plain files keep the data easy
- * to archive alongside the thesis and to analyze offline.
+ * to archive alongside the thesis and to analyze offline. What a line and a
+ * run's metadata contain is in domain/run-records.ts; this class does the I/O.
  */
 @Injectable()
 export class SyncMetricsService {
@@ -50,48 +59,19 @@ export class SyncMetricsService {
         await mkdir(runDir, { recursive: true });
 
         const serverReceivedAt = Date.now();
-        const lines = dto.records.map((record) =>
-            JSON.stringify({
-                ...record,
-                // Identity and grouping come from the authenticated request, not the record.
-                runId: dto.runId,
-                scenario: dto.scenario ?? null,
-                roomId: dto.roomId ?? null,
-                participantId: userId,
-                clientSessionId: dto.clientSessionId,
-                serverReceivedAt,
-            }),
-        );
-
-        if (dto.client) {
-            lines.unshift(
-                JSON.stringify({
-                    kind: "client_info",
-                    runId: dto.runId,
-                    participantId: userId,
-                    clientSessionId: dto.clientSessionId,
-                    serverReceivedAt,
-                    ...dto.client,
-                }),
-            );
-        }
+        const lines = storedLines(userId, dto, serverReceivedAt);
 
         if (lines.length > 0) {
             const file = join(
                 runDir,
-                `${this.safe(userId)}__${dto.clientSessionId}.ndjson`,
+                sessionFileName(userId, dto.clientSessionId),
             );
             await appendFile(file, lines.join("\n") + "\n", "utf8");
         }
 
-        await this.updateMeta(dto.runId, (meta) => {
-            meta.lastRecordAt = serverReceivedAt;
-            meta.recordCount += dto.records.length;
-            addUnique(meta.scenarios, dto.scenario);
-            addUnique(meta.roomIds, dto.roomId);
-            addUnique(meta.participants, userId);
-            addUnique(meta.clientSessions, dto.clientSessionId);
-        });
+        await this.updateMeta(dto.runId, (meta) =>
+            recordBatch(meta, userId, dto, serverReceivedAt),
+        );
 
         this.logger.debug({
             message: "Sync metrics batch stored",
@@ -113,7 +93,7 @@ export class SyncMetricsService {
 
         const runs: SyncRunSummary[] = [];
         for (const runId of entries) {
-            if (!SAFE_ID_PATTERN.test(runId)) continue;
+            if (!isSafeId(runId)) continue;
             const dir = join(this.rootDir, runId);
             if (!(await stat(dir)).isDirectory()) continue;
 
@@ -128,16 +108,16 @@ export class SyncMetricsService {
                 lastModified = Math.max(lastModified, info.mtimeMs);
             }
             const meta = await this.readMeta(runId);
-            runs.push({
-                ...meta,
-                lastRecordAt: meta.lastRecordAt || lastModified,
-                createdAt: meta.createdAt || lastModified,
-                files: files.length,
-                bytes,
-            });
+            runs.push(
+                summarizeRun(meta, {
+                    count: files.length,
+                    bytes,
+                    lastModified,
+                }),
+            );
         }
 
-        return runs.sort((a, b) => b.lastRecordAt - a.lastRecordAt);
+        return newestFirst(runs);
     }
 
     /**
@@ -164,20 +144,7 @@ export class SyncMetricsService {
         const records: Record<string, unknown>[] = [];
         for (const file of files) {
             const content = await readFile(join(dir, file), "utf8");
-            for (const line of content.split("\n")) {
-                if (!line.trim()) continue;
-                try {
-                    const record = JSON.parse(line) as Record<string, unknown>;
-                    if (
-                        since !== undefined &&
-                        !(Number(record.serverReceivedAt) > since)
-                    )
-                        continue;
-                    records.push(record);
-                } catch {
-                    // A torn final line (process killed mid-write) is skipped.
-                }
-            }
+            records.push(...parseRunLines(content, since));
         }
         return { meta: await this.readMeta(runId), records, serverTime };
     }
@@ -187,13 +154,7 @@ export class SyncMetricsService {
         dto: UpdateSyncRunDto,
     ): Promise<SyncRunMeta> {
         await this.assertRunExists(runId);
-        return this.updateMeta(runId, (meta) => {
-            if (dto.notes !== undefined) meta.notes = dto.notes;
-            if (dto.tags !== undefined)
-                meta.tags = [
-                    ...new Set(dto.tags.map((t) => t.trim()).filter(Boolean)),
-                ];
-        });
+        return this.updateMeta(runId, (meta) => annotateRun(meta, dto));
     }
 
     async deleteRun(runId: string): Promise<{ deleted: string }> {
@@ -214,25 +175,13 @@ export class SyncMetricsService {
     }
 
     private async readMeta(runId: string): Promise<SyncRunMeta> {
-        const empty: SyncRunMeta = {
-            runId,
-            createdAt: 0,
-            lastRecordAt: 0,
-            recordCount: 0,
-            scenarios: [],
-            roomIds: [],
-            participants: [],
-            clientSessions: [],
-            notes: "",
-            tags: [],
-        };
         try {
             const raw = JSON.parse(
                 await readFile(join(this.runDir(runId), META_FILE), "utf8"),
             ) as Partial<SyncRunMeta>;
-            return { ...empty, ...raw, runId };
+            return restoreRunMeta(runId, raw);
         } catch {
-            return empty;
+            return emptyRunMeta(runId);
         }
     }
 
@@ -265,17 +214,9 @@ export class SyncMetricsService {
     }
 
     private runDir(runId: string): string {
-        if (!SAFE_ID_PATTERN.test(runId)) {
+        if (!isSafeId(runId)) {
             throw new BadRequestException("Invalid runId");
         }
         return join(this.rootDir, runId);
     }
-
-    private safe(value: string): string {
-        return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
-    }
-}
-
-function addUnique(list: string[], value: string | undefined | null): void {
-    if (value && !list.includes(value)) list.push(value);
 }

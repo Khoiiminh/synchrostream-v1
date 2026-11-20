@@ -8,9 +8,10 @@ import {
     Matches,
     MaxLength,
 } from "class-validator";
+import { SAFE_ID_PATTERN } from "./domain/run-records.js";
 
-/** Run, scenario and participant identifiers become path segments, so keep them filename-safe. */
-export const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
+// Filename-safe ids: the rule lives with the run rules.
+export { SAFE_ID_PATTERN };
 
 /**
  * One batch of synchronization measurements from one client.
