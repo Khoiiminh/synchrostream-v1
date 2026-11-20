@@ -5,10 +5,8 @@ import {
     NotFoundException,
 } from "@nestjs/common";
 import { AdminIngestionService } from "./admin-ingestion.service.js";
-import type { AdminRepository } from "./admin.repository.js";
-import type { AdminTranscodingService } from "./admin-transcoding.service.js";
-import type { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
-import type { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
+import type { MovieCatalogWrites as AdminRepository } from "../media/queries/movie-catalog-writes.js";
+import type { MediaTelemetryGateway } from "./presentation/admin-media-telemetry.gateway.js";
 
 /*
  * Characterization of the upload flow (plan B3), written before the split
@@ -36,8 +34,8 @@ function setup() {
     const broadcast = { broadcastMovieStatusUpdate: jest.fn() };
     const service = new AdminIngestionService(
         catalog as unknown as AdminRepository,
-        storage as unknown as CloudflareR2Provider,
-        queue as unknown as AdminTranscodingService,
+        storage,
+        queue,
         broadcast as unknown as MediaTelemetryGateway,
     );
     return { service, catalog, storage, queue, broadcast };
@@ -54,7 +52,7 @@ const initiate = (ctx: Ctx) =>
 
 async function expectHttp(
     promise: Promise<unknown>,
-    type: typeof HttpException,
+    type: new (...args: never[]) => HttpException,
     status: number,
     message: string,
 ) {

@@ -1,7 +1,6 @@
 import { AdminIngestionService } from "./admin-ingestion.service.js";
-import type { AdminRepository } from "./admin.repository.js";
-import type { AdminTranscodingService } from "./admin-transcoding.service.js";
-import type { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
+import type { MovieCatalogWrites as AdminRepository } from "../media/queries/movie-catalog-writes.js";
+import type { MediaTelemetryGateway } from "./presentation/admin-media-telemetry.gateway.js";
 import type { CloudflareR2Provider } from "@/shared/infrastructure/storage/cloudflare-r2.provider.js";
 
 const MOVIE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
@@ -23,7 +22,7 @@ function setup() {
     const service = new AdminIngestionService(
         repository as unknown as AdminRepository,
         r2 as unknown as CloudflareR2Provider,
-        transcoding as unknown as AdminTranscodingService,
+        transcoding,
         gateway as unknown as MediaTelemetryGateway,
     );
     return { service, repository, r2, transcoding, gateway };

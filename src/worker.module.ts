@@ -5,11 +5,8 @@ import { PostgresProvider } from "./shared/infrastructure/database/postgres.prov
 import { RedisCacheProvider } from "./shared/infrastructure/cache/redis-cache.provider.js";
 import { CloudflareR2Provider } from "./shared/infrastructure/storage/cloudflare-r2.provider.js";
 import { MediaCatalogCache } from "./modules/media/media-catalog.cache.js";
-import { AdminRepository } from "./modules/admin/admin.repository.js";
-import { TranscodePipeline } from "./modules/admin/transcoding/transcode-pipeline.js";
-import { TranscodeJobProcessor } from "./modules/admin/transcoding/transcode-job.processor.js";
-import { TranscodeTelemetryPublisher } from "./modules/admin/transcoding/transcode-telemetry.publisher.js";
-import { TranscodeWorkerHost } from "./modules/admin/transcoding/transcode-worker.host.js";
+import { MovieCatalogWrites } from "./modules/media/queries/movie-catalog-writes.js";
+import { ADMIN_WORKER_BINDINGS } from "./modules/admin/infrastructure/transcoding/worker.bindings.js";
 
 /**
  * Root module of the transcode worker process (src/worker.ts). Deliberately
@@ -25,11 +22,8 @@ import { TranscodeWorkerHost } from "./modules/admin/transcoding/transcode-worke
         RedisCacheProvider,
         CloudflareR2Provider,
         MediaCatalogCache,
-        AdminRepository,
-        TranscodePipeline,
-        TranscodeTelemetryPublisher,
-        TranscodeJobProcessor,
-        TranscodeWorkerHost,
+        MovieCatalogWrites,
+        ...ADMIN_WORKER_BINDINGS,
     ],
 })
 export class WorkerModule {}

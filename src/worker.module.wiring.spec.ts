@@ -1,12 +1,12 @@
 import "reflect-metadata";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { Test } from "@nestjs/testing";
 import { ConfigService } from "@nestjs/config";
 import type { Provider, Type } from "@nestjs/common";
 import { WorkerModule } from "./worker.module.js";
-import { TranscodeWorkerHost } from "./modules/admin/transcoding/transcode-worker.host.js";
-import { TranscodeJobProcessor } from "./modules/admin/transcoding/transcode-job.processor.js";
+import { TranscodeWorkerHost } from "./modules/admin/infrastructure/transcoding/transcode-worker.host.js";
+import { TranscodeJobProcessor } from "./modules/admin/infrastructure/transcoding/transcode-job.processor.js";
 
 /*
  * The worker must be able to resolve its providers on its own, and the API
@@ -29,11 +29,34 @@ function sources(dir: string): string[] {
 const WORKER_ONLY = new Set([
     "worker.ts",
     "worker.module.ts",
-    "modules/admin/transcoding/transcode-pipeline.ts",
-    "modules/admin/transcoding/transcode-job.processor.ts",
-    "modules/admin/transcoding/transcode-telemetry.publisher.ts",
-    "modules/admin/transcoding/transcode-worker.host.ts",
+    "modules/admin/infrastructure/transcoding/transcode-pipeline.ts",
+    "modules/admin/infrastructure/transcoding/transcode-job.processor.ts",
+    "modules/admin/infrastructure/transcoding/transcode-telemetry.publisher.ts",
+    "modules/admin/infrastructure/transcoding/transcode-worker.host.ts",
+    "modules/admin/infrastructure/transcoding/worker.bindings.ts",
 ]);
+
+const SPECIFIER = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*["']([^"']+)["']/g;
+
+/** Every project file `entry` loads, following relative and @/ imports. */
+function importClosure(entry: string): Set<string> {
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+        const key = relative(SRC, file).split(sep).join("/");
+        if (seen.has(key)) return;
+        seen.add(key);
+        for (const [, spec] of readFileSync(file, "utf8").matchAll(SPECIFIER)) {
+            let target: string | null = null;
+            if (spec.startsWith("@/")) target = join(SRC, spec.slice(2));
+            else if (spec.startsWith("src/")) target = join(SRC, spec.slice(4));
+            else if (spec.startsWith("."))
+                target = resolve(dirname(file), spec);
+            if (target) visit(target.replace(/\.js$/, "") + ".ts");
+        }
+    };
+    visit(entry);
+    return seen;
+}
 
 describe("transcode worker split", () => {
     it("resolves every WorkerModule provider without the HTTP app", async () => {
@@ -71,6 +94,12 @@ describe("transcode worker split", () => {
                 ),
             );
         expect(offenders).toEqual([]);
+    });
+
+    it("AppModule never loads a worker-only file, even indirectly", () => {
+        const loaded = importClosure(join(SRC, "app.module.ts"));
+        expect(loaded.size).toBeGreaterThan(50);
+        expect([...WORKER_ONLY].filter((f) => loaded.has(f))).toEqual([]);
     });
 
     it("keeps worker-only files out of AppModule's admin module", () => {

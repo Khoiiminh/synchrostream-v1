@@ -1,13 +1,23 @@
-import { Inject, Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import {
+    Inject,
+    Injectable,
+    Logger,
+    OnModuleDestroy,
+    type Provider,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Queue } from "bullmq";
+import {
+    TRANSCODE_QUEUE_NAME,
+    bullConnection,
     TRANSCODE_JOB_NAME,
     TRANSCODE_QUEUE,
     mezzanineKeyFor,
     transcodeJobOptions,
     transcodeMaxAttempts,
     type TranscodeQueue,
-} from "./transcoding/transcode-queue.contract.js";
+} from "./transcode-queue.contract.js";
+import type { TranscodeQueuePort } from "../../application/ports/collaborators.port.js";
 
 /**
  * API side of transcoding: only enqueues. The ffmpeg work runs in the
@@ -15,7 +25,9 @@ import {
  * gateways of CPU.
  */
 @Injectable()
-export class AdminTranscodingService implements OnModuleDestroy {
+export class AdminTranscodingService
+    implements TranscodeQueuePort, OnModuleDestroy
+{
     private readonly logger = new Logger(AdminTranscodingService.name);
     private readonly maxAttempts: number;
 
@@ -39,3 +51,13 @@ export class AdminTranscodingService implements OnModuleDestroy {
         await this.queue.close();
     }
 }
+
+/** The BullMQ producer. Producer only: the ffmpeg work runs in the worker process. */
+export const TRANSCODE_QUEUE_PROVIDER: Provider = {
+    provide: TRANSCODE_QUEUE,
+    inject: [ConfigService],
+    useFactory: (config: ConfigService): TranscodeQueue =>
+        new Queue(TRANSCODE_QUEUE_NAME, {
+            connection: bullConnection(config, { forWorker: false }),
+        }),
+};

@@ -1,6 +1,6 @@
 import type { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import type { MediaCatalogCache } from "../media/media-catalog.cache.js";
-import { AdminRepository } from "./admin.repository.js";
+import { MovieCatalogWrites } from "../media/queries/movie-catalog-writes.js";
 import {
     connectTestPostgres,
     resetDatabase,
@@ -33,7 +33,7 @@ function build() {
             return Promise.resolve();
         },
     } as unknown as MediaCatalogCache;
-    return new AdminRepository(pg, cache);
+    return new MovieCatalogWrites(pg, cache);
 }
 
 async function movie(id: string) {

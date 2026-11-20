@@ -1,5 +1,14 @@
 import type { ConfigService } from "@nestjs/config";
 import type { ConnectionOptions, JobsOptions } from "bullmq";
+import type { TranscodeJobData } from "../../domain/transcode.js";
+
+export type {
+    MovieStatus,
+    TranscodeJobData,
+    TranscodePhase,
+    TranscodeTelemetryMessage,
+} from "../../domain/transcode.js";
+export { mezzanineKeyFor } from "../../domain/ingestion.js";
 
 /*
  * The contract shared by the API process (producer) and the transcode worker
@@ -16,30 +25,6 @@ export const TRANSCODE_QUEUE = Symbol("TRANSCODE_QUEUE");
 /** Redis pub/sub channel the worker publishes telemetry on; the API relays it. */
 export const TRANSCODE_TELEMETRY_CHANNEL = "media:transcode:telemetry";
 
-export interface TranscodeJobData {
-    movieId: string;
-    /** R2 key of the consolidated raw upload, e.g. raw-mezzanines/<id>.mp4 */
-    mezzanineKey: string;
-}
-
-export type MovieStatus = "PROCESSING" | "AVAILABLE" | "FAILED";
-export type TranscodePhase = "DOWNLOADING" | "ENCODING" | "UPLOADING";
-
-export type TranscodeTelemetryMessage =
-    | {
-          type: "status";
-          movieId: string;
-          status: MovieStatus;
-          hlsUrl?: string;
-      }
-    | {
-          type: "progress";
-          movieId: string;
-          phase: TranscodePhase;
-          /** 0–100, within the phase */
-          percent: number;
-      };
-
 /** Minimal queue surface the API needs; lets tests pass a fake. */
 export interface TranscodeQueue {
     add(
@@ -49,9 +34,6 @@ export interface TranscodeQueue {
     ): Promise<unknown>;
     close(): Promise<void>;
 }
-
-export const mezzanineKeyFor = (movieId: string) =>
-    `raw-mezzanines/${movieId}.mp4`;
 
 /**
  * Wait before the first attempt so the completed multipart object has
