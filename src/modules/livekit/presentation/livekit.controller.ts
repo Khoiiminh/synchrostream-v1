@@ -13,8 +13,8 @@ import {
     ApiTags,
 } from "@nestjs/swagger";
 import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
-import { LiveKitService } from "./livekit.service.js";
-import { CreateMediaSessionDto } from "./media-session.dto.js";
+import { LiveKitService } from "../livekit.service.js";
+import { CreateMediaSessionDto } from "./dto/media-session.dto.js";
 import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 @ApiTags("LiveKit")

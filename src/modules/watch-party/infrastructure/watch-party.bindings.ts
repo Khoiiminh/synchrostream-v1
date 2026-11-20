@@ -1,7 +1,10 @@
 import type { Provider } from "@nestjs/common";
 import { RedisProvider } from "@/shared/infrastructure/cache/redis.provider.js";
 import { AttemptLimiter } from "@/shared/infrastructure/cache/attempt-limiter.js";
-import { LiveKitService } from "../../livekit/livekit.service.js";
+import {
+    LIVEKIT_MEDIA_SESSIONS,
+    type LiveKitMediaSessions,
+} from "../../livekit/queries/livekit-media-sessions.js";
 import { RoomLifecycleOutboxService } from "./outbox/room-lifecycle-outbox.service.js";
 import { WatchPartyRepository } from "./persistence/watch-party.repository.js";
 import { RoomChatRepository } from "./persistence/room-chat.repository.js";
@@ -32,7 +35,7 @@ type Implements<Port, Adapter extends Port> = Adapter;
 export type AdapterChecks = [
     Implements<RoomStateProjectionPort, RedisProvider>,
     Implements<RealtimeStatePort, RedisProvider>,
-    Implements<MediaSessionPort, LiveKitService>,
+    Implements<MediaSessionPort, LiveKitMediaSessions>,
     Implements<AttemptLimiterPort, AttemptLimiter>,
 ];
 
@@ -43,7 +46,7 @@ export const WATCH_PARTY_PORT_BINDINGS: Provider[] = [
     { provide: PASSWORD_HASHER, useExisting: BcryptPasswordHasher },
     { provide: ATTEMPT_LIMITER, useExisting: AttemptLimiter },
     { provide: LIFECYCLE_OUTBOX, useExisting: RoomLifecycleOutboxService },
-    { provide: MEDIA_SESSION, useExisting: LiveKitService },
+    { provide: MEDIA_SESSION, useExisting: LIVEKIT_MEDIA_SESSIONS },
     { provide: ROOM_STATE_PROJECTION, useExisting: RedisProvider },
     { provide: REALTIME_STATE, useExisting: RedisProvider },
 ];
