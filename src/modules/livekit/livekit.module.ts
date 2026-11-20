@@ -1,21 +1,18 @@
-import { LiveKitModule } from "@/shared/infrastructure/livekit/livekit.module.js";
-import { LiveKitService } from "./livekit.service.js";
-import { LiveKitRepository } from "./livekit.repository.js";
 import { Module } from "@nestjs/common";
-import { LiveKitController } from "./livekit.controller.js";
-import { MediaSessionService } from "./media-session.service.js";
-import { MediaSessionRepository } from "./media-session.repository.js";
+import { LiveKitService } from "./livekit.service.js";
+import { LiveKitController } from "./presentation/livekit.controller.js";
+import { LIVEKIT_PORT_BINDINGS } from "./infrastructure/livekit.bindings.js";
+import { LIVEKIT_MEDIA_SESSIONS } from "./queries/livekit-media-sessions.js";
 import { WatchPartyContractsModule } from "../watch-party/queries/watch-party-contracts.module.js";
 
 @Module({
-    imports: [LiveKitModule, WatchPartyContractsModule],
+    imports: [WatchPartyContractsModule],
     controllers: [LiveKitController],
     providers: [
+        ...LIVEKIT_PORT_BINDINGS,
         LiveKitService,
-        LiveKitRepository,
-        MediaSessionService,
-        MediaSessionRepository,
+        { provide: LIVEKIT_MEDIA_SESSIONS, useExisting: LiveKitService },
     ],
-    exports: [LiveKitService],
+    exports: [LIVEKIT_MEDIA_SESSIONS],
 })
 export class LiveKitApplicationModule {}

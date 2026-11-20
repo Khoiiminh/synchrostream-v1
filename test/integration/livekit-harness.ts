@@ -2,11 +2,12 @@ import type { PostgresProvider } from "../../src/shared/infrastructure/database/
 import type { RoomAccessQuery } from "../../src/modules/watch-party/queries/room-access.query.js";
 import type { MediaSessionEvents } from "../../src/modules/watch-party/queries/media-session-events.js";
 import { LiveKitService } from "../../src/modules/livekit/livekit.service.js";
-import { LiveKitRepository } from "../../src/modules/livekit/livekit.repository.js";
-import { MediaSessionService } from "../../src/modules/livekit/media-session.service.js";
-import { MediaSessionRepository } from "../../src/modules/livekit/media-session.repository.js";
-import type { LiveKitTokenService } from "../../src/shared/infrastructure/livekit/livekit.token.service.js";
-import type { LiveKitInfrastructureService } from "../../src/shared/infrastructure/livekit/livekit.infrastructure.service.js";
+import { MediaSessionRepository } from "../../src/modules/livekit/infrastructure/persistence/media-session.repository.js";
+import {
+    LiveKitProviderAdapter,
+    type LiveKitRoomApi,
+} from "../../src/modules/livekit/infrastructure/provider/livekit-provider.adapter.js";
+import type { ParticipantTokenPort } from "../../src/modules/livekit/application/ports/collaborators.port.js";
 
 /*
  * Builds the LiveKit media-session service for the characterization tests
@@ -83,13 +84,30 @@ export function buildLiveKit(deps: {
 }) {
     const provider = new FakeProvider();
     const tokens = new FakeTokens();
-    const mediaRepository = new MediaSessionRepository(deps.pg, deps.rooms);
+    const mediaRepository = new MediaSessionRepository(
+        deps.pg,
+        deps.rooms,
+        deps.events,
+    );
+    // The real provider adapter (with its not-found handling) over the fake
+    // server, which speaks the SDK's RoomServiceClient shape.
+    const roomApi: LiveKitRoomApi = {
+        createRoom: (o) => provider.createRoom(o.name, o.maxParticipants),
+        deleteRoom: (name) => provider.deleteRoom(name),
+        listParticipants: (name) => provider.listParticipants(name),
+        removeParticipant: (name, identity) =>
+            provider.removeParticipant(name, identity),
+    };
+    const tokenPort: ParticipantTokenPort = {
+        serverUrl: TEST_LIVEKIT_URL,
+        createParticipantToken: (request) =>
+            tokens.createParticipantToken({ ...request }),
+    };
     const service = new LiveKitService(
-        new LiveKitRepository(deps.pg, deps.rooms, deps.events),
-        new MediaSessionService(mediaRepository),
-        tokens as unknown as LiveKitTokenService,
-        provider as unknown as LiveKitInfrastructureService,
-        { url: TEST_LIVEKIT_URL, apiKey: "test-key", apiSecret: "test-secret" },
+        mediaRepository,
+        deps.rooms,
+        new LiveKitProviderAdapter(roomApi),
+        tokenPort,
     );
 
     return {

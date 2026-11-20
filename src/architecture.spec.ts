@@ -11,7 +11,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
  *   2. A module imports another module only through its queries/ folder or
  *      a *.module.ts at its root. src/shared/ and src/common/ are open to all.
  *   3. src/shared/ and src/common/ import no module.
- *   4. Where a module has layers: domain/ imports only domain/ and node:;
+ *   4. Vendor SDKs stay in one adapter folder (VENDOR_SDKS).
+ *   5. Where a module has layers: domain/ imports only domain/ and node:;
  *      application/ imports only application/, domain/, <name>.types and node:;
  *      queries/ imports nothing else of its module; infrastructure/ never
  *      imports presentation/.
@@ -95,7 +96,7 @@ const FOREIGN_TABLE_USES: Record<string, number> = {
     // insertCreatedSessionIfRoomActive: INSERT … SELECT FROM rooms FOR SHARE,
     // one statement so the session is created only while the room is ACTIVE.
     // Splitting it would change the locking; stays a documented exception.
-    "modules/livekit/media-session.repository.ts → rooms": 1,
+    "modules/livekit/infrastructure/persistence/media-session.repository.ts → rooms": 1,
     // requeueStuckMediaSessions: the outbox sweeper's read-only scan for stuck
     // LiveKit sessions, joined with rooms in one statement.
     "modules/watch-party/infrastructure/persistence/room-lifecycle-outbox.repository.ts → media_sessions": 1,
@@ -116,11 +117,15 @@ const CROSS_MODULE_IMPORTS: Record<string, number> = {
     // WsJwtGuard reads the users table through AuthRepository, so it stays in
     // auth rather than shared/auth; the gateway uses it in @UseGuards.
     "modules/watch-party/watch-party.gateway.ts → modules/auth/guards/ws-jwt.guard": 1,
-    // B2: the MEDIA_SESSION port binds to a livekit use-case facade exported
-    // from livekit/queries/, instead of the concrete LiveKitService.
-    "modules/watch-party/infrastructure/watch-party.bindings.ts → modules/livekit/livekit.service": 1,
     // B3: admin invalidates the catalog cache through a port owned by media.
     "modules/admin/admin.repository.ts → modules/media/media-catalog.cache": 1,
+};
+
+// ----------------------------------------------------------- vendor SDKs --
+
+/** Package → the only folder whose files may import it. */
+const VENDOR_SDKS: Record<string, string> = {
+    "livekit-server-sdk": "modules/livekit/infrastructure/provider",
 };
 
 // ---------------------------------------------------------------- layers --
@@ -208,8 +213,26 @@ describe("backend architecture", () => {
         ).toEqual([]);
     });
 
-    it("has at least one layered module to check", () => {
-        expect(LAYERED).toContain("watch-party");
+    it.each(Object.entries(VENDOR_SDKS))(
+        "%s is imported only under %s",
+        (pkg, folder) => {
+            const importers = ALL.filter((file) =>
+                importsOf(file).some(
+                    ({ specifier }) =>
+                        specifier === pkg || specifier.startsWith(pkg + "/"),
+                ),
+            ).map(rel);
+            expect(importers.length).toBeGreaterThan(0);
+            expect(
+                importers.filter((f) => !f.startsWith(folder + "/")),
+            ).toEqual([]);
+        },
+    );
+
+    it("has the layered modules to check", () => {
+        expect(LAYERED).toEqual(
+            expect.arrayContaining(["watch-party", "livekit"]),
+        );
     });
 
     describe.each(LAYERED)("%s layers", (module) => {

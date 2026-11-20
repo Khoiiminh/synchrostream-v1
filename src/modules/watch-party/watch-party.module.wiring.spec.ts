@@ -14,8 +14,9 @@ import { RoomChatRepository } from "./infrastructure/persistence/room-chat.repos
 import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-hasher.js";
 import { RoomAccessQuery } from "./queries/room-access.query.js";
 import { MediaSessionEvents } from "./queries/media-session-events.js";
-import { LiveKitRepository } from "../livekit/livekit.repository.js";
-import { MediaSessionRepository } from "../livekit/media-session.repository.js";
+import { MediaSessionRepository } from "../livekit/infrastructure/persistence/media-session.repository.js";
+import { LiveKitProviderAdapter } from "../livekit/infrastructure/provider/livekit-provider.adapter.js";
+import { LIVEKIT_MEDIA_SESSIONS } from "../livekit/queries/livekit-media-sessions.js";
 import {
     ATTEMPT_LIMITER,
     CHAT_STORE,
@@ -122,21 +123,36 @@ describe("WatchPartyModule wiring", () => {
         expect(relay.repository).toBe(moduleRef.get(CHAT_STORE));
     });
 
-    it("LiveKit and media sessions reach watch-party tables only through its contract", () => {
+    it("LiveKit reaches watch-party tables only through its contract", () => {
         const rooms = moduleRef.get(RoomAccessQuery, { strict: false });
         const events = moduleRef.get(MediaSessionEvents, { strict: false });
-        const liveKitRepo = moduleRef.get<
-            LiveKitRepository,
-            Record<string, unknown>
-        >(LiveKitRepository, { strict: false });
         const mediaRepo = moduleRef.get<
             MediaSessionRepository,
             Record<string, unknown>
         >(MediaSessionRepository, { strict: false });
         expect(rooms).toBeInstanceOf(RoomAccessQuery);
-        expect(liveKitRepo.rooms).toBe(rooms);
-        expect(liveKitRepo.events).toBe(events);
         expect(mediaRepo.rooms).toBe(rooms);
+        expect(mediaRepo.events).toBe(events);
+    });
+
+    it("watch-party's media port is LiveKit's published contract, built from its ports", () => {
+        const media = moduleRef.get<unknown>(MEDIA_SESSION, { strict: false });
+        expect(media).toBe(
+            moduleRef.get<unknown>(LIVEKIT_MEDIA_SESSIONS, { strict: false }),
+        );
+
+        const liveKit = media as Record<string, Record<string, unknown>>;
+        const store = moduleRef.get(MediaSessionRepository, { strict: false });
+        const provider = moduleRef.get(LiveKitProviderAdapter, {
+            strict: false,
+        });
+        const rooms = moduleRef.get(RoomAccessQuery, { strict: false });
+        expect(liveKit.end.store).toBe(store);
+        expect(liveKit.end.provider).toBe(provider);
+        expect(liveKit.start.rooms).toBe(rooms);
+        expect(liveKit.getOrCreate.start).toBe(liveKit.start);
+        expect(liveKit.getOrCreate.end).toBe(liveKit.end);
+        expect(liveKit.reconcile.end).toBe(liveKit.end);
     });
 
     it("the gateway's realtime collaborators share one context with the bound ports", () => {
