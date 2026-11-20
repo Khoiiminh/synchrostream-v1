@@ -6,7 +6,7 @@ import {
     Logger,
     NotFoundException,
 } from "@nestjs/common";
-import { MediaSessionService } from "../media-session-sfu/media-session.service.js";
+import { MediaSessionService } from "./media-session.service.js";
 import {
     LIVEKIT_CONFIG,
     type LiveKitConfig,
@@ -14,10 +14,7 @@ import {
 import { LiveKitConnectionDto } from "./livekit.dto.js";
 import { LiveKitTokenService } from "@/shared/infrastructure/livekit/livekit.token.service.js";
 import { LiveKitInfrastructureService } from "@/shared/infrastructure/livekit/livekit.infrastructure.service.js";
-import {
-    MediaSession,
-    mapMediaSessionRow,
-} from "../media-session-sfu/media-session.types.js";
+import { MediaSession, mapMediaSessionRow } from "./media-session.types.js";
 import { LiveKitRepository } from "./livekit.repository.js";
 
 /**

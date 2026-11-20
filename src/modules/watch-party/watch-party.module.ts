@@ -4,7 +4,6 @@ import { JwtModule } from "@nestjs/jwt";
 import { WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyGateway } from "./watch-party.gateway.js";
 import { WatchPartyController } from "./watch-party.controller.js";
-import { MediaSessionModule } from "../media-session-sfu/media-session.module.js";
 import { LiveKitApplicationModule } from "../livekit/livekit.module.js";
 import { AuthModule } from "../auth/auth.module.js";
 import { RoomLifecycleOutboxService } from "./infrastructure/outbox/room-lifecycle-outbox.service.js";
@@ -18,7 +17,6 @@ import { WATCH_PARTY_PORT_BINDINGS } from "./infrastructure/watch-party.bindings
     imports: [
         InfrastructureModule,
         AuthModule,
-        MediaSessionModule,
         LiveKitApplicationModule,
         JwtModule.register({
             secret: process.env.JWT_SECRET || "fallback-secret-key",

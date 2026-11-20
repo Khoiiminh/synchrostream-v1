@@ -15,7 +15,7 @@ import { BcryptPasswordHasher } from "./infrastructure/security/bcrypt-password-
 import { RoomAccessQuery } from "./queries/room-access.query.js";
 import { MediaSessionEvents } from "./queries/media-session-events.js";
 import { LiveKitRepository } from "../livekit/livekit.repository.js";
-import { MediaSessionRepository } from "../media-session-sfu/media-session.repository.js";
+import { MediaSessionRepository } from "../livekit/media-session.repository.js";
 import {
     ATTEMPT_LIMITER,
     CHAT_STORE,
