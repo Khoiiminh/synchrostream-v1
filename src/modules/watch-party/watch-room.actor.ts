@@ -31,10 +31,6 @@ export class WatchRoomActor {
     // before LiveKit is available, and the session may be replaced after recovery.
     private currentMediaSessionId: string | null;
 
-    // Media readiness is independent of watch-room admission: the actor may exist
-    // before LiveKit is available, and the session may be replaced after recovery.
-    private currentMediaSessionId: string | null;
-
     constructor(
         public readonly roomId: string,
         public readonly roomCode: string,
