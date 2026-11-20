@@ -1,13 +1,16 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
-import { MediaCatalogCache } from "../media/media-catalog.cache.js";
+import { MediaCatalogCache } from "../media-catalog.cache.js";
 
 /**
- * Write-side SQL for the `movies` table (ingestion and transcoding). Every
- * write drops the cached catalog so GET /media/catalog sees it at once.
+ * The media module's published write contract for the `movies` table, used
+ * by admin ingestion (API) and transcoding (worker). Every write drops the
+ * cached catalog so GET /media/catalog sees it at once.
+ *
+ * SQL moved byte-for-byte from admin/admin.repository.ts (plan B3).
  */
 @Injectable()
-export class AdminRepository {
+export class MovieCatalogWrites {
     constructor(
         private readonly pg: PostgresProvider,
         private readonly catalogCache: MediaCatalogCache,

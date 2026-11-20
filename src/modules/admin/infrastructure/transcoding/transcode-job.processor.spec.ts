@@ -3,12 +3,8 @@ import {
     TranscodeJobProcessor,
     type TranscodeJob,
 } from "./transcode-job.processor.js";
-import type { AdminRepository } from "../admin.repository.js";
-import type {
-    TranscodePipeline,
-    TranscodeProgressListener,
-} from "./transcode-pipeline.js";
-import type { TranscodeTelemetryPublisher } from "./transcode-telemetry.publisher.js";
+import type { MovieCatalogWrites as AdminRepository } from "../../../media/queries/movie-catalog-writes.js";
+import type { TranscodeProgressListener } from "./transcode-pipeline.js";
 import type { TranscodeTelemetryMessage } from "./transcode-queue.contract.js";
 
 type StatusMessage = Extract<TranscodeTelemetryMessage, { type: "status" }>;
@@ -38,8 +34,8 @@ function setup() {
     );
     const processor = new TranscodeJobProcessor(
         repository as unknown as AdminRepository,
-        pipeline as unknown as TranscodePipeline,
-        telemetry as unknown as TranscodeTelemetryPublisher,
+        pipeline,
+        telemetry,
     );
     const job: TranscodeJob = {
         id: MOVIE_ID,
@@ -183,6 +179,38 @@ describe("TranscodeJobProcessor (worker job handling)", () => {
             expect(telemetry.publish).toHaveBeenCalledWith(
                 expect.objectContaining({ status: "FAILED" }),
             );
+        });
+
+        it("the attempt before the last is not final; the last one is", async () => {
+            const { processor, repository, job } = setup();
+            await processor.onFailed(
+                { ...job, attemptsMade: 2 },
+                new Error("x"),
+            );
+            expect(repository.markFailed).not.toHaveBeenCalled();
+            await processor.onFailed(
+                { ...job, attemptsMade: 3 },
+                new Error("x"),
+            );
+            expect(repository.markFailed).toHaveBeenCalledTimes(1);
+        });
+
+        it("a job without an attempts option is final after one failure", async () => {
+            const { processor, repository, job } = setup();
+            await processor.onFailed(
+                { ...job, attemptsMade: 1, opts: {} },
+                new Error("x"),
+            );
+            expect(repository.markFailed).toHaveBeenCalledWith(MOVIE_ID);
+        });
+
+        it("an error named UnrecoverableError (another bullmq copy) is final", async () => {
+            const { processor, repository, job } = setup();
+            const foreign = Object.assign(new Error("gone"), {
+                name: "UnrecoverableError",
+            });
+            await processor.onFailed({ ...job, attemptsMade: 1 }, foreign);
+            expect(repository.markFailed).toHaveBeenCalledWith(MOVIE_ID);
         });
 
         it("ignores a failure event without a job", async () => {

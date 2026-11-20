@@ -91,8 +91,6 @@ function tableUses(file: string, table: string): number {
 const FOREIGN_TABLE_USES: Record<string, number> = {
     // B4: password-reset folds into auth, which owns users.
     "modules/password-reset/password-reset.repository.ts → users": 5,
-    // B3: admin writes the catalog through a MediaCatalogPort owned by media.
-    "modules/admin/admin.repository.ts → movies": 6,
     // insertCreatedSessionIfRoomActive: INSERT … SELECT FROM rooms FOR SHARE,
     // one statement so the session is created only while the room is ACTIVE.
     // Splitting it would change the locking; stays a documented exception.
@@ -117,8 +115,6 @@ const CROSS_MODULE_IMPORTS: Record<string, number> = {
     // WsJwtGuard reads the users table through AuthRepository, so it stays in
     // auth rather than shared/auth; the gateway uses it in @UseGuards.
     "modules/watch-party/watch-party.gateway.ts → modules/auth/guards/ws-jwt.guard": 1,
-    // B3: admin invalidates the catalog cache through a port owned by media.
-    "modules/admin/admin.repository.ts → modules/media/media-catalog.cache": 1,
 };
 
 // ----------------------------------------------------------- vendor SDKs --
@@ -126,6 +122,9 @@ const CROSS_MODULE_IMPORTS: Record<string, number> = {
 /** Package → the only folder whose files may import it. */
 const VENDOR_SDKS: Record<string, string> = {
     "livekit-server-sdk": "modules/livekit/infrastructure/provider",
+    bullmq: "modules/admin/infrastructure/transcoding",
+    "fluent-ffmpeg": "modules/admin/infrastructure/transcoding",
+    "@ffmpeg-installer/ffmpeg": "modules/admin/infrastructure/transcoding",
 };
 
 // ---------------------------------------------------------------- layers --
@@ -231,7 +230,7 @@ describe("backend architecture", () => {
 
     it("has the layered modules to check", () => {
         expect(LAYERED).toEqual(
-            expect.arrayContaining(["watch-party", "livekit"]),
+            expect.arrayContaining(["watch-party", "livekit", "admin"]),
         );
     });
 

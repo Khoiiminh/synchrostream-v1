@@ -1,4 +1,5 @@
 import {
+    Inject,
     Injectable,
     Logger,
     OnModuleDestroy,
@@ -6,7 +7,8 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Redis } from "ioredis";
-import { MediaTelemetryGateway } from "../admin-media-telemetry.gateway.js";
+import type { AdminTelemetryBroadcastPort } from "../../application/ports/collaborators.port.js";
+import { ADMIN_TELEMETRY_BROADCAST } from "../../application/ports/tokens.js";
 import {
     TRANSCODE_TELEMETRY_CHANNEL,
     type TranscodeTelemetryMessage,
@@ -24,7 +26,8 @@ export class TranscodeTelemetryRelay implements OnModuleInit, OnModuleDestroy {
 
     constructor(
         private readonly configService: ConfigService,
-        private readonly gateway: MediaTelemetryGateway,
+        @Inject(ADMIN_TELEMETRY_BROADCAST)
+        private readonly gateway: AdminTelemetryBroadcastPort,
     ) {}
 
     async onModuleInit() {

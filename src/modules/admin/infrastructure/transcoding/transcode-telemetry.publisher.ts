@@ -10,11 +10,12 @@ import {
     TRANSCODE_TELEMETRY_CHANNEL,
     type TranscodeTelemetryMessage,
 } from "./transcode-queue.contract.js";
+import type { TranscodeTelemetryPort } from "../../application/ports/collaborators.port.js";
 
 /** Worker side: publishes status and progress for the API to relay. */
 @Injectable()
 export class TranscodeTelemetryPublisher
-    implements OnModuleInit, OnModuleDestroy
+    implements TranscodeTelemetryPort, OnModuleInit, OnModuleDestroy
 {
     private readonly logger = new Logger(TranscodeTelemetryPublisher.name);
     private client?: Redis;

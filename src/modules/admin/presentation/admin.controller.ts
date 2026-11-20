@@ -17,8 +17,8 @@ import {
 import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
 import { RolesGuard } from "@/shared/auth/roles.guard.js";
 import { Roles } from "@/shared/auth/roles.decorator.js";
-import { AdminIngestionService } from "./admin-ingestion.service.js";
-import { CompleteUploadDto, InitiateUploadDto } from "./admin.dto.js";
+import { AdminIngestionService } from "../admin-ingestion.service.js";
+import { CompleteUploadDto, InitiateUploadDto } from "./dto/admin.dto.js";
 import { FileInterceptor } from "@nestjs/platform-express";
 import {
     ApiBearerAuth,
@@ -28,7 +28,6 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { AdminTranscodingService } from "./admin-transcoding.service.js";
 import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 @ApiTags("Admin Panel")
@@ -38,10 +37,7 @@ import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 @Roles("ADMIN")
 export class AdminController {
     private readonly logger = new Logger(AdminController.name);
-    constructor(
-        private readonly ingestionService: AdminIngestionService,
-        private readonly transcodingService: AdminTranscodingService,
-    ) {}
+    constructor(private readonly ingestionService: AdminIngestionService) {}
 
     @Post("initiate")
     @ApiOperation({

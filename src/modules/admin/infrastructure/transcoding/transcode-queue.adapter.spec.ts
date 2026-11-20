@@ -1,10 +1,10 @@
 import { ConfigService } from "@nestjs/config";
-import { AdminTranscodingService } from "./admin-transcoding.service.js";
+import { AdminTranscodingService } from "./transcode-queue.adapter.js";
 import {
     TRANSCODE_JOB_NAME,
     TRANSCODE_START_DELAY_MS,
     type TranscodeQueue,
-} from "./transcoding/transcode-queue.contract.js";
+} from "./transcode-queue.contract.js";
 
 const MOVIE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 

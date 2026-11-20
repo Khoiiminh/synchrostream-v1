@@ -1,6 +1,5 @@
 import { ConfigService } from "@nestjs/config";
 import { TranscodeTelemetryRelay } from "./transcode-telemetry.relay.js";
-import type { MediaTelemetryGateway } from "../admin-media-telemetry.gateway.js";
 
 const MOVIE_ID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 
@@ -9,10 +8,7 @@ function setup() {
         broadcastMovieStatusUpdate: jest.fn(),
         broadcastTranscodeProgress: jest.fn(),
     };
-    const relay = new TranscodeTelemetryRelay(
-        {} as ConfigService,
-        gateway as unknown as MediaTelemetryGateway,
-    );
+    const relay = new TranscodeTelemetryRelay({} as ConfigService, gateway);
     return { relay, gateway };
 }
 

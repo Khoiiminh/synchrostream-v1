@@ -1,39 +1,34 @@
 import { Module } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { Queue } from "bullmq";
 import { AdminIngestionService } from "./admin-ingestion.service.js";
-import { AdminRepository } from "./admin.repository.js";
-import { AdminController } from "./admin.controller.js";
-import { AdminTranscodingService } from "./admin-transcoding.service.js";
-import { MediaTelemetryGateway } from "./admin-media-telemetry.gateway.js";
+import { AdminController } from "./presentation/admin.controller.js";
+import { MediaTelemetryGateway } from "./presentation/admin-media-telemetry.gateway.js";
 import { MediaModule } from "../media/media.module.js";
-import { TranscodeTelemetryRelay } from "./transcoding/transcode-telemetry.relay.js";
-import {
-    TRANSCODE_QUEUE,
-    TRANSCODE_QUEUE_NAME,
-    bullConnection,
-    type TranscodeQueue,
-} from "./transcoding/transcode-queue.contract.js";
+import { TranscodeTelemetryRelay } from "./infrastructure/transcoding/transcode-telemetry.relay.js";
+import { ADMIN_API_BINDINGS } from "./infrastructure/admin.bindings.js";
+import type { AdminTelemetryBroadcastPort } from "./application/ports/collaborators.port.js";
+import { ADMIN_TELEMETRY_BROADCAST } from "./application/ports/tokens.js";
+
+// The /telemetry gateway is a presentation class, so it is bound here rather
+// than in infrastructure/admin.bindings.ts.
+type Implements<Port, Adapter extends Port> = Adapter;
+export type GatewayCheck = Implements<
+    AdminTelemetryBroadcastPort,
+    MediaTelemetryGateway
+>;
 
 @Module({
     imports: [MediaModule],
     controllers: [AdminController],
     providers: [
+        ...ADMIN_API_BINDINGS,
         AdminIngestionService,
-        AdminTranscodingService,
-        AdminRepository,
         MediaTelemetryGateway,
         TranscodeTelemetryRelay,
         {
-            // Producer only: the ffmpeg work runs in the worker process.
-            provide: TRANSCODE_QUEUE,
-            inject: [ConfigService],
-            useFactory: (config: ConfigService): TranscodeQueue =>
-                new Queue(TRANSCODE_QUEUE_NAME, {
-                    connection: bullConnection(config, { forWorker: false }),
-                }),
+            provide: ADMIN_TELEMETRY_BROADCAST,
+            useExisting: MediaTelemetryGateway,
         },
     ],
-    exports: [AdminIngestionService, AdminTranscodingService],
+    exports: [AdminIngestionService],
 })
 export class AdminModule {}
