@@ -18,12 +18,12 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
-import { RolesGuard } from "../auth/guards/roles.guard.js";
-import { Roles } from "../auth/decorators/roles.decorator.js";
+import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
+import { RolesGuard } from "@/shared/auth/roles.guard.js";
+import { Roles } from "@/shared/auth/roles.decorator.js";
 import { CreateRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { WatchPartyGateway } from "./watch-party.gateway.js";
-import type { AuthenticatedRequest } from "../auth/auth.types.js";
+import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 /** Conflicts that a confirmed `leaveCurrent` request may resolve by leaving that room. */
 const SWITCHABLE_CONFLICTS = new Set([

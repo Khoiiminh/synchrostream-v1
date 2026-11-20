@@ -13,8 +13,8 @@ import { AuthRepository } from "../auth.repository.js";
 import type {
     AuthenticatedSocket,
     JwtPayload,
-    UserProfileRow,
-} from "../auth.types.js";
+} from "@/shared/auth/auth-context.types.js";
+import type { UserProfileRow } from "../auth.types.js";
 
 /**
  * Profile rows never change after registration (no username, email or role

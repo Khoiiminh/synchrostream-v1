@@ -17,12 +17,12 @@ import {
     ApiQuery,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
-import { RolesGuard } from "../auth/guards/roles.guard.js";
-import { Roles } from "../auth/decorators/roles.decorator.js";
+import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
+import { RolesGuard } from "@/shared/auth/roles.guard.js";
+import { Roles } from "@/shared/auth/roles.decorator.js";
 import { SyncMetricsBatchDto, UpdateSyncRunDto } from "./sync-metrics.dto.js";
 import { SyncMetricsService } from "./sync-metrics.service.js";
-import type { AuthenticatedRequest } from "../auth/auth.types.js";
+import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 /**
  * Any signed-in party participant can upload measurements; only admins can

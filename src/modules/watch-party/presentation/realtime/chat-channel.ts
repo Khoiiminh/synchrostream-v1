@@ -1,4 +1,4 @@
-import type { AuthenticatedSocket } from "../../../auth/auth.types.js";
+import type { AuthenticatedSocket } from "@/shared/auth/auth-context.types.js";
 import type { ChatSendAck } from "../../watch-party.types.js";
 import type { RealtimeContext } from "./realtime-context.js";
 

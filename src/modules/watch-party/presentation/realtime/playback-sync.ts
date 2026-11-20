@@ -1,5 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
-import type { AuthenticatedSocket } from "../../../auth/auth.types.js";
+import type { AuthenticatedSocket } from "@/shared/auth/auth-context.types.js";
 import type { WatchPartyService } from "../../watch-party.service.js";
 import type { RealtimeContext } from "./realtime-context.js";
 

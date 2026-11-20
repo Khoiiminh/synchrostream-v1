@@ -5,6 +5,7 @@ import {
     NotFoundException,
     ServiceUnavailableException,
 } from "@nestjs/common";
+import { httpErrorBoundary } from "@/shared/http/http-error-boundary.js";
 import { WatchPartyDomainError } from "../domain/errors.js";
 import type * as Errors from "../domain/errors.js";
 
@@ -74,20 +75,13 @@ export function toHttpException(error: WatchPartyDomainError): HttpException {
     }
 }
 
-/** Rethrows a domain error as its HTTP exception; anything else unchanged. */
-export function rethrowAsHttp(error: unknown): never {
-    if (error instanceof WatchPartyDomainError) throw toHttpException(error);
-    throw error;
-}
-
-/** Runs `fn`, converting domain errors it throws into HTTP exceptions. */
-export async function withHttpErrors<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-        return await fn();
-    } catch (error) {
-        rethrowAsHttp(error);
-    }
-}
+/** Rethrows a domain error as its HTTP exception; anything else unchanged.
+ *  withHttpErrors runs a call and does the same for what it throws. */
+export const { rethrowAsHttp, withHttpErrors } = httpErrorBoundary(
+    (error: unknown): error is WatchPartyDomainError =>
+        error instanceof WatchPartyDomainError,
+    toHttpException,
+);
 
 type AnyDomainError =
     | Errors.RoomPasswordPolicyViolation
