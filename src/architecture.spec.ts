@@ -18,7 +18,12 @@ import { dirname, join, relative, resolve, sep } from "node:path";
  *      imports presentation/.
  *
  * Exceptions are counted exactly: a new occurrence fails, and so does
- * removing one without updating the list. Each says which phase removes it.
+ * removing one without updating the list. Each says why it stays.
+ *
+ * Why a test and not eslint-plugin-boundaries (decided in B6): rule 1 reads
+ * SQL text, the exceptions are counted, and rule 4 maps packages to folders,
+ * none of which the plugin expresses. A failure here prints the exact
+ * offending "file → target" pairs, and there is no extra dependency.
  */
 
 const SRC = __dirname;
