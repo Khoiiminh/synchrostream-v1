@@ -15,8 +15,9 @@ describe("AppController", () => {
     });
 
     describe("root", () => {
-        it('should return "Hello World!"', () => {
-            expect(appController.getHello()).toBe("Hello World!");
+        // A liveness response: hosts may probe GET / to check the API is up.
+        it('answers "App is listening"', () => {
+            expect(appController.getHello()).toBe("App is listening");
         });
     });
 });
