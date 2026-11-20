@@ -234,6 +234,7 @@ describe("backend architecture", () => {
                 "admin",
                 "auth",
                 "password-reset",
+                "sync-metrics",
             ]),
         );
     });

@@ -85,14 +85,43 @@ describe("sign-up and sign-in", () => {
 
 describe("password reset", () => {
     /*
-     * KNOWN BUG, pinned as failing (plan B4 note): reset_expires is
-     * `timestamp` without a time zone, and node-pg sends a Date as local time
-     * with an offset, which Postgres drops on that column. A token therefore
-     * lives 1 h plus the app server's UTC offset (8 h at UTC+7; already
-     * expired west of UTC). Correct only when the app runs at UTC. When this
-     * is fixed, this test starts passing and `it.failing` reports it.
+     * reset_expires is timestamptz (migration *_reset_expires_timestamptz), so
+     * the offset node-pg sends with a Date is honoured. Before, the offset was
+     * dropped and a token lived 1 h plus the server's UTC offset (8 h at
+     * UTC+7; already expired west of UTC).
      */
-    it.failing("an expiry one minute ago is already expired", async () => {
+    it.each([
+        ["Bangkok", 7],
+        ["UTC", 0],
+        ["New York", -5],
+    ])(
+        "an expiry written by a %s server means the same instant",
+        async (_zone, offsetHours) => {
+            const { auth, reset } = build();
+            const id = await auth.createUser("a", "a@x.test", "hash-a");
+            // node-pg serializes a Date as local time plus that zone's offset.
+            const local = (ms: number) => {
+                const shifted = new Date(ms + offsetHours * 3_600_000);
+                const sign = offsetHours < 0 ? "-" : "+";
+                const hh = String(Math.abs(offsetHours)).padStart(2, "0");
+                return `${shifted.toISOString().slice(0, 23)}${sign}${hh}:00`;
+            };
+
+            await pg.query(
+                "UPDATE public.users SET reset_token = 'gone', reset_expires = $1 WHERE id = $2",
+                [local(Date.now() - 60_000), id],
+            );
+            expect(await reset.findUserIdByResetToken("gone")).toBeUndefined();
+
+            await pg.query(
+                "UPDATE public.users SET reset_token = 'good', reset_expires = $1 WHERE id = $2",
+                [local(Date.now() + 60_000), id],
+            );
+            expect(await reset.findUserIdByResetToken("good")).toBe(id);
+        },
+    );
+
+    it("a Date from this process expires on time", async () => {
         const { auth, reset } = build();
         const id = await auth.createUser("a", "a@x.test", "hash-a");
         await reset.saveResetToken(
@@ -101,6 +130,8 @@ describe("password reset", () => {
             new Date(Date.now() - 60_000),
         );
         expect(await reset.findUserIdByResetToken("just-gone")).toBeUndefined();
+        await reset.saveResetToken(id, "fresh", new Date(Date.now() + 60_000));
+        expect(await reset.findUserIdByResetToken("fresh")).toBe(id);
     });
 
     it("a saved token finds its user until it expires", async () => {
