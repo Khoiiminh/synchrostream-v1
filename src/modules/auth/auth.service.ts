@@ -10,7 +10,7 @@ import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { LoginDto, RegisterDto } from "./auth.dto.js";
 import { AuthRepository } from "./auth.repository.js";
-import type { JwtPayload } from "./auth.types.js";
+import type { JwtPayload } from "@/shared/auth/auth-context.types.js";
 import { RedisBlacklistProvider } from "@/shared/infrastructure/cache/redis-blacklist.provider.js";
 import {
     AttemptLimiter,

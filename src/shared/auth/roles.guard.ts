@@ -7,8 +7,8 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { Observable } from "rxjs";
-import { ROLES_KEY } from "../decorators/roles.decorator.js";
-import type { AuthenticatedRequest } from "../auth.types.js";
+import { ROLES_KEY } from "./roles.decorator.js";
+import type { AuthenticatedRequest } from "./auth-context.types.js";
 
 @Injectable()
 export class RolesGuard implements CanActivate {

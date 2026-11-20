@@ -14,9 +14,9 @@ import {
     UseGuards,
     UseInterceptors,
 } from "@nestjs/common";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
-import { RolesGuard } from "../auth/guards/roles.guard.js";
-import { Roles } from "../auth/decorators/roles.decorator.js";
+import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
+import { RolesGuard } from "@/shared/auth/roles.guard.js";
+import { Roles } from "@/shared/auth/roles.decorator.js";
 import { AdminIngestionService } from "./admin-ingestion.service.js";
 import { CompleteUploadDto, InitiateUploadDto } from "./admin.dto.js";
 import { FileInterceptor } from "@nestjs/platform-express";
@@ -29,7 +29,7 @@ import {
     ApiTags,
 } from "@nestjs/swagger";
 import { AdminTranscodingService } from "./admin-transcoding.service.js";
-import type { AuthenticatedRequest } from "../auth/auth.types.js";
+import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 @ApiTags("Admin Panel")
 @ApiBearerAuth("JWT-auth")

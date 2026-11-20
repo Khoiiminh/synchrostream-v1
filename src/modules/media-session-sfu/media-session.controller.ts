@@ -13,11 +13,11 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
+import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
 import { MediaSessionService } from "./media-session.service.js";
 import { CreateMediaSessionDto } from "./media-session.dto.js";
 import { MediaOrchestrationService } from "./media-orchestration.service.js";
-import type { AuthenticatedRequest } from "../auth/auth.types.js";
+import type { AuthenticatedRequest } from "@/shared/auth/auth-context.types.js";
 
 @ApiTags("Media Session")
 @ApiBearerAuth("JWT-auth")

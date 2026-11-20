@@ -1,5 +1,5 @@
 import { BadRequestException, HttpException } from "@nestjs/common";
-import type { AuthenticatedSocket } from "../../../auth/auth.types.js";
+import type { AuthenticatedSocket } from "@/shared/auth/auth-context.types.js";
 import { WatchRoomActor } from "../../watch-room.actor.js";
 import type {
     JoinRoomDto,

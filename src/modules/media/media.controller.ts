@@ -13,9 +13,9 @@ import {
     ApiResponse,
     ApiTags,
 } from "@nestjs/swagger";
-import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard.js";
-import { RolesGuard } from "../auth/guards/roles.guard.js";
-import { Roles } from "../auth/decorators/roles.decorator.js";
+import { JwtAuthGuard } from "@/shared/auth/jwt-auth.guard.js";
+import { RolesGuard } from "@/shared/auth/roles.guard.js";
+import { Roles } from "@/shared/auth/roles.decorator.js";
 import { MediaService } from "./media.service.js";
 
 @ApiTags("Media Discovery")

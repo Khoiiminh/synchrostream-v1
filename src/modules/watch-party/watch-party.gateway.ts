@@ -17,7 +17,7 @@ import {
 import { Namespace } from "socket.io";
 import { JoinRoomDto, WatchPartyService } from "./watch-party.service.js";
 import { WsJwtGuard } from "../auth/guards/ws-jwt.guard.js";
-import type { AuthenticatedSocket } from "../auth/auth.types.js";
+import type { AuthenticatedSocket } from "@/shared/auth/auth-context.types.js";
 import { RoomChatRelay } from "./room-chat.relay.js";
 import type { ChatSendAck } from "./watch-party.types.js";
 import type {
