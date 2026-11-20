@@ -4,7 +4,7 @@ import type {
     SqlExecutor,
     TransactionClient,
 } from "@/shared/infrastructure/database/sql-executor.js";
-import type { MediaSessionRow } from "../media-session-sfu/media-session.types.js";
+import type { MediaSessionRow } from "./media-session.types.js";
 import type { ActiveParticipantRow, ActiveRoomRow } from "./livekit.types.js";
 import { RoomAccessQuery } from "../watch-party/queries/room-access.query.js";
 import { MediaSessionEvents } from "../watch-party/queries/media-session-events.js";

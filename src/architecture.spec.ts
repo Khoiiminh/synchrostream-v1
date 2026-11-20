@@ -71,8 +71,7 @@ const under = (path: string, dir: string) => path.startsWith(dir + sep);
 const TABLE_OWNER: Record<string, string> = {
     users: "auth",
     movies: "media",
-    media_sessions: "media-session-sfu",
-    sfu_nodes: "media-session-sfu",
+    media_sessions: "livekit",
     rooms: "watch-party",
     room_participants: "watch-party",
     room_lifecycle_outbox: "watch-party",
@@ -93,12 +92,10 @@ const FOREIGN_TABLE_USES: Record<string, number> = {
     "modules/password-reset/password-reset.repository.ts → users": 5,
     // B3: admin writes the catalog through a MediaCatalogPort owned by media.
     "modules/admin/admin.repository.ts → movies": 6,
-    // B1: the media_sessions lifecycle moves into livekit, which then owns it.
-    "modules/livekit/livekit.repository.ts → media_sessions": 3,
     // insertCreatedSessionIfRoomActive: INSERT … SELECT FROM rooms FOR SHARE,
     // one statement so the session is created only while the room is ACTIVE.
-    // Moves with the session lifecycle in B1 and stays a documented exception.
-    "modules/media-session-sfu/media-session.repository.ts → rooms": 1,
+    // Splitting it would change the locking; stays a documented exception.
+    "modules/livekit/media-session.repository.ts → rooms": 1,
     // requeueStuckMediaSessions: the outbox sweeper's read-only scan for stuck
     // LiveKit sessions, joined with rooms in one statement.
     "modules/watch-party/infrastructure/persistence/room-lifecycle-outbox.repository.ts → media_sessions": 1,
@@ -119,11 +116,6 @@ const CROSS_MODULE_IMPORTS: Record<string, number> = {
     // WsJwtGuard reads the users table through AuthRepository, so it stays in
     // auth rather than shared/auth; the gateway uses it in @UseGuards.
     "modules/watch-party/watch-party.gateway.ts → modules/auth/guards/ws-jwt.guard": 1,
-    // B1: the session lifecycle moves into livekit; these imports disappear.
-    "modules/livekit/livekit.service.ts → modules/media-session-sfu/media-session.service": 1,
-    "modules/livekit/livekit.service.ts → modules/media-session-sfu/media-session.types": 1,
-    "modules/livekit/livekit.repository.ts → modules/media-session-sfu/media-session.types": 1,
-    "modules/livekit/livekit.controller.ts → modules/media-session-sfu/media-session.dto": 1,
     // B2: the MEDIA_SESSION port binds to a livekit use-case facade exported
     // from livekit/queries/, instead of the concrete LiveKitService.
     "modules/watch-party/infrastructure/watch-party.bindings.ts → modules/livekit/livekit.service": 1,

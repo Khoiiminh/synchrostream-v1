@@ -9,7 +9,6 @@ import { InfrastructureModule } from "./shared/infrastructure/infrastructure.mod
 import { AdminModule } from "./modules/admin/admin.module.js";
 import { MediaModule } from "./modules/media/media.module.js";
 import { WatchPartyModule } from "./modules/watch-party/watch-party.module.js";
-import { MediaSessionModule } from "./modules/media-session-sfu/media-session.module.js";
 import { LiveKitApplicationModule } from "./modules/livekit/livekit.module.js";
 import { SyncMetricsModule } from "./modules/sync-metrics/sync-metrics.module.js";
 
@@ -26,7 +25,6 @@ import { SyncMetricsModule } from "./modules/sync-metrics/sync-metrics.module.js
         MediaModule,
         WatchPartyModule,
 
-        MediaSessionModule,
         LiveKitApplicationModule,
         SyncMetricsModule,
     ],

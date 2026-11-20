@@ -16,7 +16,7 @@ export class MediaSessionService {
     /**
      * Creates the control-plane representation of a media session.
      *
-     * This method does NOT create an SFU runtime.
+     * This method does NOT create the LiveKit room.
      * It only creates the authoritative MediaSession record in PostgreSQL.
      */
     async createMediaSession(roomId: string): Promise<MediaSession> {
@@ -130,101 +130,10 @@ export class MediaSessionService {
     }
 
     /**
-     * Starts the control-plane MediaSession lifecycle.
-     *
-     * IMPORTANT:
-     * This does not create the SFU runtime yet.
-     *
-     * MediaOrchestration will later be responsible for selecting an SFU node
-     * and asking that node to create the corresponding runtime.
-     */
-    async startMediaSession(mediaSessionId: string): Promise<MediaSession> {
-        const session = await this.getMediaSession(mediaSessionId);
-
-        if (session.status !== "CREATED") {
-            throw new ConflictException(
-                `MediaSession cannot start from status ${session.status}.`,
-            );
-        }
-
-        const row = await this.repository.markStarting(mediaSessionId);
-
-        if (!row) {
-            throw new ConflictException(
-                "MediaSession state changed before it could be started.",
-            );
-        }
-
-        this.logger.log({
-            message: "MediaSession transitioned to STARTING",
-            mediaSessionId,
-        });
-
-        return mapMediaSessionRow(row);
-    }
-
-    /**
-     * Marks a MediaSession as ACTIVE.
-     *
-     * This operation is intentionally separated from startMediaSession().
-     *
-     * Later MediaOrchestration/SFU integration will call this only after the
-     * assigned SFU runtime has been successfully established.
-     */
-    async activateMediaSession(mediaSessionId: string): Promise<MediaSession> {
-        const row = await this.repository.markActive(mediaSessionId);
-
-        if (!row) {
-            throw new ConflictException(
-                "MediaSession cannot transition to ACTIVE from its current state.",
-            );
-        }
-
-        this.logger.log({
-            message: "MediaSession transitioned to ACTIVE",
-            mediaSessionId,
-        });
-
-        return mapMediaSessionRow(row);
-    }
-
-    /**
-     * Begins media-session shutdown.
-     */
-    async endMediaSession(mediaSessionId: string): Promise<MediaSession> {
-        const session = await this.getMediaSession(mediaSessionId);
-
-        if (
-            session.status !== "CREATED" &&
-            session.status !== "STARTING" &&
-            session.status !== "ACTIVE"
-        ) {
-            throw new ConflictException(
-                `MediaSession cannot end from status ${session.status}.`,
-            );
-        }
-
-        const row = await this.repository.markEnding(mediaSessionId);
-
-        if (!row) {
-            throw new ConflictException(
-                "MediaSession state changed before it could be ended.",
-            );
-        }
-
-        this.logger.log({
-            message: "MediaSession transitioned to ENDING",
-            mediaSessionId,
-        });
-
-        return mapMediaSessionRow(row);
-    }
-
-    /**
      * Permanently closes a MediaSession.
      *
      * This should happen after the media runtime has been successfully
-     * terminated by the SFU layer.
+     * terminated by the media provider (LiveKit).
      */
     async completeMediaSession(mediaSessionId: string): Promise<MediaSession> {
         const row = await this.repository.markEnded(mediaSessionId);
@@ -241,59 +150,5 @@ export class MediaSessionService {
         });
 
         return mapMediaSessionRow(row);
-    }
-
-    /**
-     * Assigns a MediaSession to an SFU node.
-     *
-     * MediaOrchestration will eventually own the decision of which node
-     * should receive the assignment.
-     *
-     * This method only persists the assignment.
-     */
-    async assignMediaSession(
-        mediaSessionId: string,
-        sfuNodeId: string,
-    ): Promise<MediaSession> {
-        const session = await this.getMediaSession(mediaSessionId);
-
-        if (session.status !== "CREATED" && session.status !== "STARTING") {
-            throw new ConflictException(
-                `Cannot assign an SFU node while MediaSession is ${session.status}.`,
-            );
-        }
-
-        const node = await this.repository.findSfuNodeByNodeId(sfuNodeId);
-
-        if (!node) {
-            throw new NotFoundException(
-                `SFU node ${sfuNodeId} does not exist.`,
-            );
-        }
-
-        if (node.status !== "HEALTHY" && node.status !== "DEGRADED") {
-            throw new ConflictException(
-                `SFU node ${sfuNodeId} is not available.`,
-            );
-        }
-
-        const updatedSession = await this.repository.setAssignedSfuNode(
-            mediaSessionId,
-            node.id,
-        );
-
-        if (!updatedSession) {
-            throw new NotFoundException(
-                `MediaSession ${mediaSessionId} was not found.`,
-            );
-        }
-
-        this.logger.log({
-            message: "SFU node assigned to MediaSession",
-            mediaSessionId,
-            sfuNodeId,
-        });
-
-        return mapMediaSessionRow(updatedSession);
     }
 }

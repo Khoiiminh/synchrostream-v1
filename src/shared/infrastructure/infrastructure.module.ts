@@ -6,13 +6,10 @@ import { CloudflareR2Provider } from "./storage/cloudflare-r2.provider.js";
 import { RedisBlacklistProvider } from "./cache/redis-blacklist.provider.js";
 import { RedisCacheProvider } from "./cache/redis-cache.provider.js";
 import { AttemptLimiter } from "./cache/attempt-limiter.js";
-import { SfuControlClient } from "./sfu/sfu-control.client.js";
-import { SfuSignalingTokenService } from "./sfu/sfu-signaling-token.service.js";
-import { JwtModule } from "@nestjs/jwt";
 
 @Global() // Makes these available everywhere without repeat imports
 @Module({
-    imports: [ConfigModule, JwtModule],
+    imports: [ConfigModule],
     providers: [
         PostgresProvider,
         RedisProvider,
@@ -20,8 +17,6 @@ import { JwtModule } from "@nestjs/jwt";
         RedisBlacklistProvider,
         RedisCacheProvider,
         AttemptLimiter,
-        SfuControlClient,
-        SfuSignalingTokenService,
     ],
     exports: [
         PostgresProvider,
@@ -30,8 +25,6 @@ import { JwtModule } from "@nestjs/jwt";
         RedisBlacklistProvider,
         RedisCacheProvider,
         AttemptLimiter,
-        SfuControlClient,
-        SfuSignalingTokenService,
     ],
 })
 export class InfrastructureModule {}
