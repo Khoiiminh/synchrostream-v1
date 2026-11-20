@@ -11,7 +11,15 @@ import * as crypto from "crypto";
 import * as nodemailer from "nodemailer";
 import { google } from "googleapis";
 import { RequestResetDto, ResetPasswordDto } from "./password-reset.dto.js";
-import { PasswordResetRepository } from "./password-reset.repository.js";
+import { PasswordResetAccounts } from "../auth/queries/password-reset-accounts.js";
+import { ACCOUNT_PASSWORD_HASH_COST } from "@/shared/auth/password-policy.js";
+import {
+    RESET_REQUEST_ANSWER,
+    RESET_TOKEN_BYTES,
+    resetLink,
+    resetTokenExpiry,
+    resetValidityText,
+} from "./domain/reset-token.js";
 import { ConfigService } from "@nestjs/config";
 import {
     AttemptLimiter,
@@ -25,14 +33,13 @@ export class PasswordService implements OnModuleInit {
     private clientSecret!: string;
     private redirectUrl!: string;
     private refreshToken!: string;
-    private tokenTTL!: number;
 
     // initialize logger
     private readonly logger = new Logger(PasswordService.name);
 
     constructor(
         private readonly configService: ConfigService,
-        private readonly passwordResetRepository: PasswordResetRepository,
+        private readonly passwordResetRepository: PasswordResetAccounts,
         private readonly attemptLimiter: AttemptLimiter,
     ) {}
 
@@ -109,17 +116,11 @@ export class PasswordService implements OnModuleInit {
                 message: "Password reset requested for unknown email",
                 email: maskEmail(dto.email),
             });
-            return {
-                message: "If an account exists, a reset link has been sent.",
-            };
+            return { ...RESET_REQUEST_ANSWER };
         }
 
-        const ttl = 3600000;
-
-        const token = crypto.randomBytes(32).toString("hex");
-        const expiresAt = new Date(Date.now() + ttl);
-
-        this.tokenTTL = ttl;
+        const token = crypto.randomBytes(RESET_TOKEN_BYTES).toString("hex");
+        const expiresAt = resetTokenExpiry(Date.now());
 
         this.logger.debug({
             message: "Generated password reset token",
@@ -151,7 +152,7 @@ export class PasswordService implements OnModuleInit {
             throw new InternalServerErrorException("Error sending email");
         }
 
-        return { message: "If an account exists, a reset link has been sent." };
+        return { ...RESET_REQUEST_ANSWER };
     }
 
     private async sendResetEmail({
@@ -163,13 +164,12 @@ export class PasswordService implements OnModuleInit {
     }) {
         const frontendUrl = this.configService.get<string>("FRONTEND_URL");
         const transporter = await this.createTransporter();
-        const ttl = this.tokenTTL / 1000 / 60;
 
         const html = `
             <div style="font-family: sans-serif; text-align: center; border: 1px solid #eee; padding: 20px;">
                 <h2 style="color: #333;">SynchroStream</h2>
-                <p>You requested a password reset. This verification is valid for ${ttl} ${ttl > 1 ? "minutes" : "minute"}.</p>
-                <a href="${frontendUrl}/auth/password-reset?token=${token}" 
+                <p>You requested a password reset. This verification is valid for ${resetValidityText()}.</p>
+                <a href="${resetLink(frontendUrl, token)}" 
                    style="display: inline-block; background: #000; color: #fff; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">
                    Reset Password
                 </a>
@@ -199,7 +199,10 @@ export class PasswordService implements OnModuleInit {
             throw new BadRequestException("Invalid or expired token");
         }
 
-        const newHash = await bcrypt.hash(dto.newPassword, 10);
+        const newHash = await bcrypt.hash(
+            dto.newPassword,
+            ACCOUNT_PASSWORD_HASH_COST,
+        );
 
         await this.passwordResetRepository.updatePasswordAndClearToken(
             userId,

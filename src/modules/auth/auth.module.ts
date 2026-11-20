@@ -6,6 +6,7 @@ import { AuthRepository } from "./auth.repository.js";
 import { AuthController } from "./auth.controller.js";
 import { InfrastructureModule } from "src/shared/infrastructure/infrastructure.module.js";
 import { JwtStrategy } from "./strategies/jwt.strategy.js";
+import { PasswordResetAccounts } from "./queries/password-reset-accounts.js";
 
 @Module({
     imports: [
@@ -19,8 +20,13 @@ import { JwtStrategy } from "./strategies/jwt.strategy.js";
             }),
         }),
     ],
-    providers: [AuthService, AuthRepository, JwtStrategy],
+    providers: [
+        AuthService,
+        AuthRepository,
+        JwtStrategy,
+        PasswordResetAccounts,
+    ],
     controllers: [AuthController],
-    exports: [AuthService, AuthRepository],
+    exports: [AuthService, AuthRepository, PasswordResetAccounts],
 })
 export class AuthModule {}

@@ -89,8 +89,6 @@ function tableUses(file: string, table: string): number {
 }
 
 const FOREIGN_TABLE_USES: Record<string, number> = {
-    // B4: password-reset folds into auth, which owns users.
-    "modules/password-reset/password-reset.repository.ts → users": 5,
     // insertCreatedSessionIfRoomActive: INSERT … SELECT FROM rooms FOR SHARE,
     // one statement so the session is created only while the room is ACTIVE.
     // Splitting it would change the locking; stays a documented exception.
@@ -230,7 +228,13 @@ describe("backend architecture", () => {
 
     it("has the layered modules to check", () => {
         expect(LAYERED).toEqual(
-            expect.arrayContaining(["watch-party", "livekit", "admin"]),
+            expect.arrayContaining([
+                "watch-party",
+                "livekit",
+                "admin",
+                "auth",
+                "password-reset",
+            ]),
         );
     });
 
