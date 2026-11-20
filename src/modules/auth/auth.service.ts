@@ -11,6 +11,11 @@ import * as bcrypt from "bcrypt";
 import { LoginDto, RegisterDto } from "./auth.dto.js";
 import { AuthRepository } from "./auth.repository.js";
 import type { JwtPayload } from "@/shared/auth/auth-context.types.js";
+import { ACCOUNT_PASSWORD_HASH_COST } from "@/shared/auth/password-policy.js";
+import {
+    accessTokenLifetime,
+    remainingLifetimeSeconds,
+} from "./domain/access-token.js";
 import { RedisBlacklistProvider } from "@/shared/infrastructure/cache/redis-blacklist.provider.js";
 import {
     AttemptLimiter,
@@ -47,7 +52,10 @@ export class AuthService {
             throw new ConflictException("Account already exists");
         }
 
-        const passwordHash = await bcrypt.hash(dto.password, 10);
+        const passwordHash = await bcrypt.hash(
+            dto.password,
+            ACCOUNT_PASSWORD_HASH_COST,
+        );
 
         const userId = await this.authRepository.createUser(
             dto.username,
@@ -98,8 +106,9 @@ export class AuthService {
             role: user.role,
         };
 
-        const expiresIn = user.role === "ADMIN" ? "1h" : "7d";
-        const token = this.jwtService.sign(payload, { expiresIn });
+        const token = this.jwtService.sign(payload, {
+            expiresIn: accessTokenLifetime(user.role),
+        });
 
         await this.attemptLimiter.reset(LOGIN_RULE, attemptId);
 
@@ -131,10 +140,12 @@ export class AuthService {
             };
         }
 
-        const now = Math.floor(Date.now() / 1000);
-        const ttl = (decoded.exp ?? now) - now;
+        const ttl = remainingLifetimeSeconds(
+            decoded.exp,
+            Math.floor(Date.now() / 1000),
+        );
 
-        if (ttl > 0) {
+        if (ttl !== null) {
             await this.blacklist.add({ token, ttl });
             this.logger.log({
                 message: "User logged out; token blacklisted",

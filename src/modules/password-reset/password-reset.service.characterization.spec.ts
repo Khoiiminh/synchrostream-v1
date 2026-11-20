@@ -7,7 +7,7 @@ import {
 import type { ConfigService } from "@nestjs/config";
 import * as bcrypt from "bcrypt";
 import { PasswordService } from "./password-reset.service.js";
-import type { PasswordResetRepository } from "./password-reset.repository.js";
+import type { PasswordResetAccounts as PasswordResetRepository } from "../auth/queries/password-reset-accounts.js";
 import {
     AttemptLimiter,
     PASSWORD_RESET_REQUEST_RULE,

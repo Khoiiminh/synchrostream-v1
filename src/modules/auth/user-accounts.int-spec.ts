@@ -1,6 +1,6 @@
 import type { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 import { AuthRepository } from "./auth.repository.js";
-import { PasswordResetRepository } from "../password-reset/password-reset.repository.js";
+import { PasswordResetAccounts } from "./queries/password-reset-accounts.js";
 import {
     connectTestPostgres,
     resetDatabase,
@@ -27,7 +27,7 @@ beforeEach(async () => {
 function build() {
     return {
         auth: new AuthRepository(pg),
-        reset: new PasswordResetRepository(pg),
+        reset: new PasswordResetAccounts(pg),
     };
 }
 

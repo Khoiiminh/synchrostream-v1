@@ -1,9 +1,15 @@
 import { Injectable } from "@nestjs/common";
 import { PostgresProvider } from "@/shared/infrastructure/database/postgres.provider.js";
 
-/** All SQL for password-reset tokens and password updates. */
+/**
+ * Auth's published contract for the password-reset flow: the reset-token
+ * columns and password updates on `users`, which auth owns.
+ *
+ * SQL moved byte-for-byte from password-reset/password-reset.repository.ts
+ * (plan B4).
+ */
 @Injectable()
-export class PasswordResetRepository {
+export class PasswordResetAccounts {
     constructor(private readonly pg: PostgresProvider) {}
 
     async findUserIdByEmail(email: string): Promise<string | undefined> {
